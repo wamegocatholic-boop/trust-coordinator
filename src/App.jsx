@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   Calendar, MapPin, User, Phone, Mail, FileText, 
   CheckCircle, Clock, AlertCircle, Send, Key, 
-  Truck, ClipboardList, RefreshCw, Plus, ArrowRight, Link as LinkIcon, Trash2
+  Truck, ClipboardList, RefreshCw, Plus, ArrowRight, Link as LinkIcon, Trash2,
+  Settings, Edit2, X
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS & SETUP ---
@@ -25,8 +26,8 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = 'trust-inspection-coordinator';
 
-// --- MOCK DATA & CONFIG ---
-const VENDOR_CONFIG = [
+// --- DEFAULT MOCK DATA (For Initial Seeding Only) ---
+const DEFAULT_VENDOR_CONFIG = [
   { match: 'Rix Termite', type: 'Termite', vendor: 'Rix Pest Control', visits: 1, phone: '555-0101', email: 'dispatch@rix.com' },
   { match: 'Kaw Valley', type: 'Termite', vendor: 'Kaw Valley Exterminator', visits: 1, phone: '555-0102', email: 'scheduling@kawvalley.com' },
   { match: 'Howell Healthy Homes', type: 'Radon', vendor: 'Howell Healthy Homes', visits: 2, phone: '555-0103', email: 'radon@howell.com' },
@@ -70,10 +71,15 @@ export default function App() {
   
   // Dashboard State
   const [jobs, setJobs] = useState([]);
+  const [vendors, setVendors] = useState([]);
   const [rawInput, setRawInput] = useState('');
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [jobToDelete, setJobToDelete] = useState(null);
+
+  // Vendor Manager State
+  const [showVendorManager, setShowVendorManager] = useState(false);
+  const [vendorForm, setVendorForm] = useState(null); // null means list view, object means edit/add view
 
   // Portal State
   const [portalJob, setPortalJob] = useState(null);
@@ -87,7 +93,7 @@ export default function App() {
   // --- ROUTING ENGINE ---
   useEffect(() => {
     const handleHashChange = () => {
-      setPortalSuccess(false); // Reset success state when navigating
+      setPortalSuccess(false);
       const hash = window.location.hash.replace('#', '');
       if (!hash) {
         setRoute({ path: 'dashboard', params: {} });
@@ -135,8 +141,6 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     
-    // If on a portal route, we only need to fetch that specific job once.
-    // We use the "public/data" collection so Vendors can access their specific job via the Magic Link.
     if (route.path === 'vendor' || route.path === 'agent') {
       const fetchPortalJob = async () => {
         try {
@@ -145,8 +149,6 @@ export default function App() {
           if (docSnap.exists()) {
             const data = docSnap.data();
             setPortalJob(data);
-            
-            // Pre-fill vendor email if applicable
             if (route.path === 'vendor') {
               const svc = data.services.find(s => s.id === route.params.serviceId);
               if (svc && svc.email) setVendorEmail(svc.email);
@@ -162,13 +164,12 @@ export default function App() {
       return;
     }
 
-    // If on the dashboard, listen to ALL jobs in real-time
+    // Fetch Jobs
     const jobsRef = collection(db, 'artifacts', appId, 'public', 'data', 'jobs');
-    const unsubscribe = onSnapshot(jobsRef, (snapshot) => {
+    const unsubJobs = onSnapshot(jobsRef, (snapshot) => {
       const loadedJobs = [];
       snapshot.forEach(doc => {
         const data = doc.data();
-        // Only show jobs created by Todd
         if (data.createdBy === user.uid) loadedJobs.push(data);
       });
       loadedJobs.sort((a, b) => b.createdAt - a.createdAt);
@@ -179,7 +180,23 @@ export default function App() {
       setIsLoading(false);
     });
 
-    return () => unsubscribe();
+    // Fetch Vendors
+    const vendorsRef = collection(db, 'artifacts', appId, 'public', 'data', 'vendors');
+    const unsubVendors = onSnapshot(vendorsRef, (snapshot) => {
+      const loadedVendors = [];
+      snapshot.forEach(doc => loadedVendors.push(doc.data()));
+      
+      // Sort alphabetically by vendor name
+      loadedVendors.sort((a, b) => a.vendor.localeCompare(b.vendor));
+      setVendors(loadedVendors);
+    }, (error) => {
+      console.error("Error fetching vendors:", error);
+    });
+
+    return () => {
+      unsubJobs();
+      unsubVendors();
+    };
   }, [user, route.path, route.params.jobId]);
 
   // --- HELPERS ---
@@ -205,16 +222,59 @@ export default function App() {
   };
 
   const generateMagicLink = (type, jobId, serviceId = null) => {
-    // Uses href.split to safely construct the URL, preventing sandbox formatting bugs
     const baseUrl = window.location.href.split('#')[0];
     if (type === 'agent') return `${baseUrl}#agent/${jobId}`;
     if (type === 'vendor') return `${baseUrl}#vendor/${jobId}/${serviceId}`;
     return baseUrl;
   };
 
+  // --- VENDOR MANAGEMENT MUTATIONS ---
+  const handleSeedVendors = async () => {
+    for (const v of DEFAULT_VENDOR_CONFIG) {
+      const id = crypto.randomUUID();
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vendors', id), { ...v, id });
+    }
+  };
+
+  const handleSaveVendor = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const vendorData = {
+      id: vendorForm.id || crypto.randomUUID(),
+      match: fd.get('match'),
+      vendor: fd.get('vendor'),
+      type: fd.get('type'),
+      phone: fd.get('phone'),
+      email: fd.get('email'),
+      visits: parseInt(fd.get('visits') || 1),
+      price: fd.get('price') ? parseFloat(fd.get('price')) : null
+    };
+
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vendors', vendorData.id), vendorData);
+      setVendorForm(null); // Return to list view
+    } catch (err) {
+      console.error("Error saving vendor:", err);
+    }
+  };
+
+  const handleDeleteVendor = async (id) => {
+    if (!window.confirm("Are you sure you want to delete this vendor?")) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vendors', id));
+    } catch (err) {
+      console.error("Error deleting vendor:", err);
+    }
+  };
+
   // --- PARSING & DATABASE MUTATIONS ---
   const handleParse = async () => {
     if (!rawInput.trim() || !user) return;
+    
+    if (vendors.length === 0) {
+      alert("No vendors found in the database. Please open 'Manage Vendors' and configure them before parsing a job.");
+      return;
+    }
 
     const lines = rawInput.split('\n').map(l => l.trim()).filter(l => l);
     const jobId = crypto.randomUUID();
@@ -281,9 +341,9 @@ export default function App() {
             let priceStr = serviceLine.match(/\$([0-9.]+)/)?.[1] || "0";
             let price = parseFloat(priceStr);
             
-            const matchedVendor = VENDOR_CONFIG.find(v => {
+            const matchedVendor = vendors.find(v => {
               const nameMatch = serviceLine.includes(v.match);
-              if (v.price) return nameMatch && price === v.price;
+              if (v.price) return nameMatch && price === parseFloat(v.price);
               return nameMatch;
             });
 
@@ -429,8 +489,15 @@ export default function App() {
           <div className="bg-blue-600 p-2 rounded-lg">
             <MapPin size={24} className="text-white" />
           </div>
-          <h1 className="text-xl font-bold tracking-tight">Trust Inspection Coordinator</h1>
+          <h1 className="text-xl font-bold tracking-tight hidden sm:block">Trust Inspection Coordinator</h1>
+          <h1 className="text-xl font-bold tracking-tight sm:hidden">Coordinator</h1>
         </div>
+        <button 
+          onClick={() => setShowVendorManager(true)}
+          className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border border-slate-700"
+        >
+          <Settings size={16} /> <span className="hidden sm:inline">Manage Vendors</span>
+        </button>
       </header>
 
       <div className="flex flex-col md:flex-row gap-4 md:gap-6 p-4 md:p-6 flex-1 overflow-y-auto md:overflow-hidden">
@@ -669,6 +736,135 @@ export default function App() {
                   >
                     Yes, Delete
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Vendor Manager Modal */}
+          {showVendorManager && (
+            <div className="absolute inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
+                <div className="bg-slate-800 text-white p-4 flex justify-between items-center shrink-0">
+                  <h2 className="text-lg font-bold flex items-center gap-2">
+                    <Settings size={20} /> Vendor Database Configuration
+                  </h2>
+                  <button onClick={() => { setShowVendorManager(false); setVendorForm(null); }} className="text-slate-300 hover:text-white transition-colors">
+                    <X size={24} />
+                  </button>
+                </div>
+                
+                <div className="p-6 overflow-y-auto flex-1">
+                  {vendorForm ? (
+                    <form onSubmit={handleSaveVendor} className="space-y-4">
+                      <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-lg font-bold text-slate-800">{vendorForm.id ? 'Edit Vendor' : 'Add New Vendor'}</h3>
+                        <button type="button" onClick={() => setVendorForm(null)} className="text-sm text-blue-600 hover:underline">← Back to List</button>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="bg-blue-50 p-4 rounded-lg md:col-span-2 border border-blue-100">
+                          <label className="block text-sm font-bold text-blue-900 mb-1">GCal Match Text (Exact String)</label>
+                          <p className="text-xs text-blue-700 mb-2">The exact text from Home Gauge/Google Calendar that triggers this vendor (e.g. "Rix Termite").</p>
+                          <input type="text" name="match" defaultValue={vendorForm.match} required className="w-full border-blue-200 rounded p-2 outline-none focus:ring-2 focus:ring-blue-500" />
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">Vendor/Company Name</label>
+                          <input type="text" name="vendor" defaultValue={vendorForm.vendor} required className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-blue-500" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">Service Type</label>
+                          <select name="type" defaultValue={vendorForm.type || 'Termite'} className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+                            <option>Termite</option>
+                            <option>Radon</option>
+                            <option>Sewer</option>
+                            <option>Mold</option>
+                            <option>Other</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">Phone Number</label>
+                          <input type="text" name="phone" defaultValue={vendorForm.phone} required className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-blue-500" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">Email Address</label>
+                          <input type="email" name="email" defaultValue={vendorForm.email} required className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-blue-500" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">Required Visits</label>
+                          <select name="visits" defaultValue={vendorForm.visits || 1} className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+                            <option value={1}>1 Visit (Standard)</option>
+                            <option value={2}>2 Visits (Drop-off & Pick-up)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">Price Filter (Optional)</label>
+                          <p className="text-xs text-slate-500 mb-1">Only use if vendor offers multiple services under same name.</p>
+                          <input type="number" step="0.01" name="price" defaultValue={vendorForm.price} placeholder="e.g. 125" className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-blue-500" />
+                        </div>
+                      </div>
+
+                      <div className="pt-4 flex justify-end gap-3 border-t mt-6">
+                        <button type="button" onClick={() => setVendorForm(null)} className="px-4 py-2 font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">Cancel</button>
+                        <button type="submit" className="px-6 py-2 font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">Save Vendor</button>
+                      </div>
+                    </form>
+                  ) : (
+                    <div>
+                      <div className="flex justify-between items-center mb-6">
+                        <p className="text-slate-600 text-sm flex-1">Configure the vendors that the system will automatically match when parsing calendar descriptions.</p>
+                        <button 
+                          onClick={() => setVendorForm({})}
+                          className="px-4 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold text-sm rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap"
+                        >
+                          <Plus size={16} /> Add Vendor
+                        </button>
+                      </div>
+
+                      {vendors.length === 0 ? (
+                        <div className="text-center py-12 bg-slate-50 rounded-xl border border-dashed border-slate-300">
+                          <Truck className="mx-auto text-slate-400 mb-3" size={32} />
+                          <h3 className="text-lg font-bold text-slate-700 mb-2">No Vendors Found</h3>
+                          <p className="text-slate-500 text-sm mb-6 max-w-sm mx-auto">Your live database is currently empty. You can manually add vendors, or load the initial testing configuration.</p>
+                          <button 
+                            onClick={handleSeedVendors}
+                            className="px-4 py-2 bg-slate-800 text-white hover:bg-slate-700 font-bold rounded-lg transition-colors"
+                          >
+                            Load Default Configuration
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {vendors.map(v => (
+                            <div key={v.id} className="border border-slate-200 p-4 rounded-lg flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-blue-300 transition-colors">
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <h3 className="font-bold text-slate-800 text-lg">{v.vendor}</h3>
+                                  <span className="bg-slate-100 text-slate-600 text-xs px-2 py-0.5 rounded font-medium">{v.type} • {v.visits} Visit(s)</span>
+                                </div>
+                                <div className="text-sm text-slate-500 mt-1 flex gap-4">
+                                  <span className="flex items-center gap-1"><Phone size={14}/> {v.phone}</span>
+                                  <span className="flex items-center gap-1"><Mail size={14}/> {v.email}</span>
+                                </div>
+                                <div className="text-xs text-blue-600 mt-2 font-mono bg-blue-50 inline-block px-2 py-1 rounded">
+                                  Match: "{v.match}" {v.price ? ` @ $${v.price}` : ''}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <button onClick={() => setVendorForm(v)} className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                                  <Edit2 size={18} />
+                                </button>
+                                <button onClick={() => handleDeleteVendor(v.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                                  <Trash2 size={18} />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
