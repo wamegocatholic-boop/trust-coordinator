@@ -26,6 +26,9 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = 'trust-inspection-coordinator';
 
+// YOUR MAKE.COM WEBHOOK URL
+const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/dio2kjm5dmlcydacspdfclfuh4g73dvf";
+
 // --- DEFAULT MOCK DATA (For Initial Seeding Only) ---
 const DEFAULT_VENDOR_CONFIG = [
   { match: 'Rix Termite', type: 'Termite', vendor: 'Rix Pest Control', visits: 1, phone: '555-0101', email: 'dispatch@rix.com' },
@@ -243,6 +246,19 @@ export default function App() {
     return baseUrl;
   };
 
+  // WEBHOOK TRIGGER FUNCTION
+  const sendWebhook = async (payload) => {
+    try {
+      await fetch(MAKE_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    } catch (err) {
+      console.error("Webhook failed to send:", err);
+    }
+  };
+
   // --- VENDOR MANAGEMENT MUTATIONS ---
   const handleSeedVendors = async () => {
     for (const v of DEFAULT_VENDOR_CONFIG) {
@@ -386,6 +402,21 @@ export default function App() {
       await setDoc(docRef, job);
       setRawInput('');
       setSelectedJobId(jobId);
+
+      // Trigger Webhook to Make.com
+      sendWebhook({
+        event: 'job_created',
+        job: job,
+        agentLink: generateMagicLink('agent', job.id),
+        vendorLinks: job.services.map(s => ({
+          vendorName: s.vendor,
+          email: s.email,
+          phone: s.phone,
+          type: s.type,
+          link: generateMagicLink('vendor', job.id, s.id)
+        }))
+      });
+
     } catch (err) {
       console.error("Error saving job:", err);
     }
@@ -425,6 +456,15 @@ export default function App() {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'jobs', portalJob.id);
       await setDoc(docRef, updatedJob);
       setPortalSuccess(true);
+
+      // Trigger Webhook to Make.com
+      sendWebhook({
+        event: 'vendor_scheduled',
+        jobId: portalJob.id,
+        address: portalJob.address,
+        vendorService: updatedJob.services.find(s => s.id === route.params.serviceId)
+      });
+
     } catch (err) {
       console.error("Error updating service schedule:", err);
     }
@@ -455,6 +495,15 @@ export default function App() {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'jobs', portalJob.id);
       await setDoc(docRef, updatedJob);
       setPortalSuccess(true);
+
+      // Trigger Webhook to Make.com
+      sendWebhook({
+        event: 'agent_access_submitted',
+        jobId: portalJob.id,
+        address: portalJob.address,
+        accessDetails: updatedJob.access
+      });
+
     } catch (err) {
       console.error("Error updating access info:", err);
     }
