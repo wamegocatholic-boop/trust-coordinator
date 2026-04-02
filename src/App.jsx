@@ -3,12 +3,12 @@ import {
   Calendar, MapPin, User, Phone, Mail, FileText, 
   CheckCircle, Clock, AlertCircle, Send, Key, 
   Truck, ClipboardList, RefreshCw, Plus, ArrowRight, Link as LinkIcon, Trash2,
-  Settings, Edit2, X
+  Settings, Edit2, X, Lock, LogOut
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS & SETUP ---
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, signInAnonymously, signInWithCustomToken, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, onSnapshot, getDoc, deleteDoc } from 'firebase/firestore';
 
 // YOUR LIVE FIREBASE CONFIGURATION
@@ -69,6 +69,11 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [route, setRoute] = useState({ path: 'dashboard', params: {} });
   
+  // Auth State
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+
   // Dashboard State
   const [jobs, setJobs] = useState([]);
   const [vendors, setVendors] = useState([]);
@@ -121,7 +126,8 @@ export default function App() {
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
           await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
+        } else if (!auth.currentUser) {
+          // Provide an anonymous session so vendors/agents can read/write their portals without an account
           await signInAnonymously(auth);
         }
       } catch (err) {
@@ -132,7 +138,7 @@ export default function App() {
 
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
-      if (!currentUser) setIsLoading(false);
+      setIsLoading(false);
     });
     return () => unsubscribe();
   }, []);
@@ -154,31 +160,26 @@ export default function App() {
               if (svc && svc.email) setVendorEmail(svc.email);
             }
           }
-          setIsLoading(false);
         } catch (err) {
           console.error("Error fetching portal job:", err);
-          setIsLoading(false);
         }
       };
       fetchPortalJob();
-      return;
+      return; // Do not fetch all jobs if we are just viewing a portal
     }
+
+    // Only fetch dashboard data if the user is a full Admin (not anonymous)
+    if (user.isAnonymous) return;
 
     // Fetch Jobs
     const jobsRef = collection(db, 'artifacts', appId, 'public', 'data', 'jobs');
     const unsubJobs = onSnapshot(jobsRef, (snapshot) => {
       const loadedJobs = [];
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        // Removed the "if (data.createdBy === user.uid)" filter so all devices can see all jobs during testing
-        loadedJobs.push(data);
-      });
+      snapshot.forEach(doc => loadedJobs.push(doc.data()));
       loadedJobs.sort((a, b) => b.createdAt - a.createdAt);
       setJobs(loadedJobs);
-      setIsLoading(false);
     }, (error) => {
       console.error("Error fetching jobs:", error);
-      setIsLoading(false);
     });
 
     // Fetch Vendors
@@ -186,8 +187,6 @@ export default function App() {
     const unsubVendors = onSnapshot(vendorsRef, (snapshot) => {
       const loadedVendors = [];
       snapshot.forEach(doc => loadedVendors.push(doc.data()));
-      
-      // Sort alphabetically by vendor name
       loadedVendors.sort((a, b) => a.vendor.localeCompare(b.vendor));
       setVendors(loadedVendors);
     }, (error) => {
@@ -201,6 +200,21 @@ export default function App() {
   }, [user, route.path, route.params.jobId]);
 
   // --- HELPERS ---
+  const handleAdminLogin = async (e) => {
+    e.preventDefault();
+    setLoginError('');
+    try {
+      await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+    } catch (err) {
+      setLoginError("Invalid email or password. Please check your Firebase console users.");
+    }
+  };
+
+  const handleAdminLogout = async () => {
+    await signOut(auth);
+    await signInAnonymously(auth); // Fallback to anonymous so routing logic doesn't crash
+  };
+
   const formatDateFriendly = (dateStr) => {
     if (!dateStr || !dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) return dateStr;
     const [y, m, d] = dateStr.split('-');
@@ -354,7 +368,11 @@ export default function App() {
                 ...matchedVendor,
                 rawText: serviceLine,
                 status: 'pending',
-                schedule: { date1: null, date2: null, timeWindow: null, requestedCalendar: false, calendarEmail: '' }
+                schedule: { 
+                  date1: null, timeWindow1: null, 
+                  date2: null, timeWindow2: null, 
+                  requestedCalendar: false, calendarEmail: '' 
+                }
               });
             }
           }
@@ -391,8 +409,9 @@ export default function App() {
     const fd = new FormData(e.target);
     const scheduleData = {
       date1: fd.get('date1'),
-      date2: fd.get('date2'),
-      timeWindow: fd.get('timeWindow'),
+      timeWindow1: fd.get('timeWindow1'),
+      date2: fd.get('date2') || null,
+      timeWindow2: fd.get('timeWindow2') || null,
       requestedCalendar: vendorWantsCalendar,
       calendarEmail: vendorWantsCalendar ? fd.get('calendarEmail') : ''
     };
@@ -470,9 +489,9 @@ export default function App() {
       text += `[${s.status === 'scheduled' ? '✓' : ' '}] ${s.type} (${s.vendor}): `;
       if (s.status === 'scheduled') {
         if (s.visits === 2) {
-           text += `\n    Drop: ${s.schedule.date1} @ ${s.schedule.timeWindow}\n    Pick: ${s.schedule.date2} @ ${s.schedule.timeWindow}`;
+           text += `\n    Drop: ${s.schedule.date1} @ ${s.schedule.timeWindow1}\n    Pick: ${s.schedule.date2} @ ${s.schedule.timeWindow2}`;
         } else {
-           text += `${s.schedule.date1} @ ${s.schedule.timeWindow}`;
+           text += `${s.schedule.date1} @ ${s.schedule.timeWindow1}`;
         }
       } else {
         text += `WAITING ON VENDOR`;
@@ -481,6 +500,50 @@ export default function App() {
     });
     return text;
   };
+
+  // --- LOGIN VIEW ---
+  const renderLogin = () => (
+    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl shadow-xl p-8 max-w-sm w-full border border-slate-200">
+        <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6">
+          <Lock size={32} />
+        </div>
+        <h2 className="text-2xl font-bold text-center text-slate-800 mb-6">Admin Login</h2>
+        
+        {loginError && (
+          <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium mb-4 text-center border border-red-100">
+            {loginError}
+          </div>
+        )}
+
+        <form onSubmit={handleAdminLogin} className="space-y-4">
+          <div>
+            <label className="block text-sm font-bold text-slate-700 mb-1">Email</label>
+            <input 
+              type="email" 
+              required 
+              value={loginEmail}
+              onChange={(e) => setLoginEmail(e.target.value)}
+              className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" 
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-bold text-slate-700 mb-1">Password</label>
+            <input 
+              type="password" 
+              required 
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" 
+            />
+          </div>
+          <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-colors shadow-md mt-2">
+            Access Dashboard
+          </button>
+        </form>
+      </div>
+    </div>
+  );
 
   // --- DASHBOARD VIEW ---
   const renderDashboard = () => (
@@ -493,12 +556,21 @@ export default function App() {
           <h1 className="text-xl font-bold tracking-tight hidden sm:block">Trust Inspection Coordinator</h1>
           <h1 className="text-xl font-bold tracking-tight sm:hidden">Coordinator</h1>
         </div>
-        <button 
-          onClick={() => setShowVendorManager(true)}
-          className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border border-slate-700"
-        >
-          <Settings size={16} /> <span className="hidden sm:inline">Manage Vendors</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={() => setShowVendorManager(true)}
+            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border border-slate-700"
+          >
+            <Settings size={16} /> <span className="hidden sm:inline">Vendors</span>
+          </button>
+          <button 
+            onClick={handleAdminLogout}
+            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border border-slate-700 text-red-400 hover:text-red-300"
+            title="Log Out"
+          >
+            <LogOut size={16} />
+          </button>
+        </div>
       </header>
 
       <div className="flex flex-col md:flex-row gap-4 md:gap-6 p-4 md:p-6 flex-1 overflow-y-auto md:overflow-hidden">
@@ -571,7 +643,6 @@ export default function App() {
                   <div className="text-slate-800 font-medium flex items-center justify-end gap-1"><Calendar size={16}/> {selectedJob.datetime}</div>
                   <div className="text-slate-500 text-sm mt-1 mb-3">ID: {selectedJob.reportId}</div>
                   
-                  {/* Delete Job Button */}
                   <button 
                     onClick={() => setJobToDelete(selectedJob.id)}
                     className="flex items-center gap-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 px-3 py-1.5 rounded-lg transition-colors"
@@ -652,11 +723,11 @@ export default function App() {
                         <div className="mt-2 text-sm font-medium text-green-700 bg-green-50 px-3 py-1.5 rounded-md inline-block">
                           {service.visits === 2 ? (
                             <>
-                              <div>Drop: {service.schedule.date1} @ {service.schedule.timeWindow}</div>
-                              <div>Pick: {service.schedule.date2} @ {service.schedule.timeWindow}</div>
+                              <div>Drop: {service.schedule.date1} @ {service.schedule.timeWindow1}</div>
+                              <div>Pick: {service.schedule.date2} @ {service.schedule.timeWindow2}</div>
                             </>
                           ) : (
-                            <div>Scheduled: {service.schedule.date1} @ {service.schedule.timeWindow}</div>
+                            <div>Scheduled: {service.schedule.date1} @ {service.schedule.timeWindow1}</div>
                           )}
                         </div>
                       )}
@@ -891,12 +962,6 @@ export default function App() {
             </div>
             <h2 className="text-2xl font-bold text-slate-800 mb-2">Schedule Confirmed</h2>
             <p className="text-slate-600 mb-6">Thank you! Trust Inspection has been notified of your schedule for {portalJob.address.split(',')[0]}.</p>
-            <button 
-              onClick={() => window.location.hash = ''}
-              className="px-4 py-2 text-sm text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg font-medium transition-colors"
-            >
-              ← Back to Dashboard
-            </button>
           </div>
         </div>
       );
@@ -904,13 +969,7 @@ export default function App() {
 
     return (
       <div className="min-h-screen bg-slate-100 p-4 md:p-8 font-sans">
-        <div className="max-w-md mx-auto relative">
-          <button 
-            onClick={() => window.location.hash = ''}
-            className="mb-4 px-3 py-1.5 text-sm text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg font-medium transition-colors shadow-sm"
-          >
-            ← Back to Dashboard
-          </button>
+        <div className="max-w-md mx-auto relative mt-6">
           <div className="bg-white rounded-xl shadow-xl overflow-hidden border border-slate-200">
             <div className="bg-blue-600 p-6 text-white text-center">
               <h2 className="text-2xl font-bold">{service.vendor}</h2>
@@ -929,31 +988,53 @@ export default function App() {
               <form onSubmit={submitVendorSchedule}>
                 {service.visits === 2 ? (
                   <>
-                    <div className="mb-4">
-                      <label className="block text-sm font-bold text-slate-700 mb-1">Drop-off Date (Visit 1)</label>
-                      <input type="date" name="date1" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <label className="block text-sm font-bold text-slate-700 mb-1">Drop-off Date</label>
+                        <input type="date" name="date1" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold text-slate-700 mb-1">Drop-off Time</label>
+                        <select name="timeWindow1" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 bg-white">
+                          <option value="Morning (8am - 12pm)">Morning</option>
+                          <option value="Afternoon (12pm - 4pm)">Afternoon</option>
+                          <option value="Late Aft. (3pm - 6pm)">Late Aft.</option>
+                        </select>
+                      </div>
                     </div>
-                    <div className="mb-4">
-                      <label className="block text-sm font-bold text-slate-700 mb-1">Pick-up Date (Visit 2)</label>
-                      <input type="date" name="date2" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+
+                    <div className="grid grid-cols-2 gap-4 mb-8">
+                      <div>
+                        <label className="block text-sm font-bold text-slate-700 mb-1">Pick-up Date</label>
+                        <input type="date" name="date2" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold text-slate-700 mb-1">Pick-up Time</label>
+                        <select name="timeWindow2" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 bg-white">
+                          <option value="Morning (8am - 12pm)">Morning</option>
+                          <option value="Afternoon (12pm - 4pm)">Afternoon</option>
+                          <option value="Late Aft. (3pm - 6pm)">Late Aft.</option>
+                        </select>
+                      </div>
                     </div>
                   </>
                 ) : (
-                  <div className="mb-4">
-                    <label className="block text-sm font-bold text-slate-700 mb-1">Service Date</label>
-                    <input type="date" name="date1" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
-                  </div>
+                  <>
+                    <div className="mb-4">
+                      <label className="block text-sm font-bold text-slate-700 mb-1">Service Date</label>
+                      <input type="date" name="date1" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+                    </div>
+                    <div className="mb-8">
+                      <label className="block text-sm font-bold text-slate-700 mb-1">Time Window</label>
+                      <select name="timeWindow1" className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 bg-white">
+                        <option value="Morning (8am - 12pm)">Morning (8am - 12pm)</option>
+                        <option value="Afternoon (12pm - 4pm)">Afternoon (12pm - 4pm)</option>
+                        <option value="Late Aft. (3pm - 6pm)">Late Afternoon (3pm - 6pm)</option>
+                      </select>
+                    </div>
+                  </>
                 )}
                 
-                <div className="mb-8">
-                  <label className="block text-sm font-bold text-slate-700 mb-1">Time Window</label>
-                  <select name="timeWindow" className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 bg-white">
-                    <option>Morning (8am - 12pm)</option>
-                    <option>Afternoon (12pm - 4pm)</option>
-                    <option>Late Afternoon (3pm - 6pm)</option>
-                  </select>
-                </div>
-
                 <div className="mb-8 p-4 bg-slate-50 border border-slate-200 rounded-lg">
                   <label className="flex items-center gap-3 cursor-pointer">
                     <input 
@@ -1005,12 +1086,6 @@ export default function App() {
             </div>
             <h2 className="text-2xl font-bold text-slate-800 mb-2">Information Received</h2>
             <p className="text-slate-600 mb-6">Thank you! Access coordination for {portalJob.address.split(',')[0]} has been updated.</p>
-            <button 
-              onClick={() => window.location.hash = ''}
-              className="px-4 py-2 text-sm text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg font-medium transition-colors"
-            >
-              ← Back to Dashboard
-            </button>
           </div>
         </div>
       );
@@ -1020,13 +1095,7 @@ export default function App() {
 
     return (
       <div className="min-h-screen bg-slate-100 p-4 md:p-8 font-sans">
-        <div className="max-w-md mx-auto relative">
-          <button 
-            onClick={() => window.location.hash = ''}
-            className="mb-4 px-3 py-1.5 text-sm text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg font-medium transition-colors shadow-sm"
-          >
-            ← Back to Dashboard
-          </button>
+        <div className="max-w-md mx-auto relative mt-6">
           <div className="bg-white rounded-xl shadow-xl overflow-hidden border border-slate-200">
             <div className="bg-emerald-600 p-6 text-white text-center">
               <h2 className="text-xl font-bold">Property Access Coordination</h2>
@@ -1117,5 +1186,8 @@ export default function App() {
 
   if (route.path === 'vendor') return renderVendorPortal();
   if (route.path === 'agent') return renderAgentPortal();
+  
+  // Dashboard Route requires Admin Login
+  if (!user || user.isAnonymous) return renderLogin();
   return renderDashboard();
 }
