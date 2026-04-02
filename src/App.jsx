@@ -2,13 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { 
   Calendar, MapPin, User, Phone, Mail, FileText, 
   CheckCircle, Clock, AlertCircle, Send, Key, 
-  Truck, ClipboardList, RefreshCw, Plus, ArrowRight, Link as LinkIcon
+  Truck, ClipboardList, RefreshCw, Plus, ArrowRight, Link as LinkIcon, Trash2
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS & SETUP ---
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, onSnapshot, getDoc } from 'firebase/firestore';
+import { getFirestore, collection, doc, setDoc, onSnapshot, getDoc, deleteDoc } from 'firebase/firestore';
 
 // YOUR LIVE FIREBASE CONFIGURATION
 const firebaseConfig = {
@@ -73,6 +73,7 @@ export default function App() {
   const [rawInput, setRawInput] = useState('');
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [jobToDelete, setJobToDelete] = useState(null);
 
   // Portal State
   const [portalJob, setPortalJob] = useState(null);
@@ -311,6 +312,17 @@ export default function App() {
     }
   };
 
+  const confirmDeleteJob = async () => {
+    if (!jobToDelete || !user) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'jobs', jobToDelete));
+      if (selectedJobId === jobToDelete) setSelectedJobId(null);
+      setJobToDelete(null);
+    } catch (err) {
+      console.error("Error deleting job:", err);
+    }
+  };
+
   const submitVendorSchedule = async (e) => {
     e.preventDefault();
     if (!portalJob || !user) return;
@@ -479,7 +491,7 @@ export default function App() {
         </div>
 
         {/* Main Content */}
-        <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col min-h-[600px] md:min-h-0 overflow-hidden mt-4 md:mt-0">
+        <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col min-h-[600px] md:min-h-0 overflow-hidden mt-4 md:mt-0 relative">
           {selectedJob ? (
             <div className="p-6 h-full overflow-y-auto">
               <div className="flex justify-between items-start mb-6">
@@ -487,9 +499,17 @@ export default function App() {
                   <h1 className="text-2xl font-bold text-slate-800">{selectedJob.address.split(',')[0]}</h1>
                   <p className="text-slate-500 flex items-center gap-1 mt-1"><MapPin size={16}/> {selectedJob.address}</p>
                 </div>
-                <div className="text-right">
+                <div className="text-right flex flex-col items-end">
                   <div className="text-slate-800 font-medium flex items-center justify-end gap-1"><Calendar size={16}/> {selectedJob.datetime}</div>
-                  <div className="text-slate-500 text-sm mt-1">ID: {selectedJob.reportId}</div>
+                  <div className="text-slate-500 text-sm mt-1 mb-3">ID: {selectedJob.reportId}</div>
+                  
+                  {/* Delete Job Button */}
+                  <button 
+                    onClick={() => setJobToDelete(selectedJob.id)}
+                    className="flex items-center gap-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 px-3 py-1.5 rounded-lg transition-colors"
+                  >
+                    <Trash2 size={14} /> Delete Job
+                  </button>
                 </div>
               </div>
 
@@ -622,6 +642,35 @@ export default function App() {
             <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
               <Calendar size={48} className="mb-4 opacity-20" />
               <p>Select a job from the left panel</p>
+            </div>
+          )}
+
+          {/* Delete Confirmation Modal */}
+          {jobToDelete && (
+            <div className="absolute inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full border border-slate-200">
+                <h3 className="text-lg font-bold text-slate-800 mb-2 flex items-center gap-2">
+                  <AlertCircle className="text-red-500" size={24} />
+                  Delete Appointment?
+                </h3>
+                <p className="text-slate-600 text-sm mb-6 leading-relaxed">
+                  Are you sure you want to delete this job? This action cannot be undone and any vendors or agents will immediately lose access to their portals.
+                </p>
+                <div className="flex justify-end gap-3">
+                  <button 
+                    onClick={() => setJobToDelete(null)}
+                    className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={confirmDeleteJob}
+                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors shadow-sm"
+                  >
+                    Yes, Delete
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
