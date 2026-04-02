@@ -1,0 +1,875 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  Calendar, MapPin, User, Phone, Mail, FileText, 
+  CheckCircle, Clock, AlertCircle, Send, Key, 
+  Truck, ClipboardList, RefreshCw, Plus, ArrowRight, Link as LinkIcon
+} from 'lucide-react';
+
+// --- FIREBASE IMPORTS & SETUP ---
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, onSnapshot, getDoc } from 'firebase/firestore';
+
+// YOUR LIVE FIREBASE CONFIGURATION
+const firebaseConfig = {
+  apiKey: "AIzaSyCjVyl8oc5ZGbq2FlrBHO02MLlxqIkSyOw",
+  authDomain: "trust-inspection-coordinator.firebaseapp.com",
+  projectId: "trust-inspection-coordinator",
+  storageBucket: "trust-inspection-coordinator.firebasestorage.app",
+  messagingSenderId: "836672752670",
+  appId: "1:836672752670:web:9859d8dc9960c0478b320f"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = 'trust-inspection-coordinator';
+
+// --- MOCK DATA & CONFIG ---
+const VENDOR_CONFIG = [
+  { match: 'Rix Termite', type: 'Termite', vendor: 'Rix Pest Control', visits: 1, phone: '555-0101', email: 'dispatch@rix.com' },
+  { match: 'Kaw Valley', type: 'Termite', vendor: 'Kaw Valley Exterminator', visits: 1, phone: '555-0102', email: 'scheduling@kawvalley.com' },
+  { match: 'Howell Healthy Homes', type: 'Radon', vendor: 'Howell Healthy Homes', visits: 2, phone: '555-0103', email: 'radon@howell.com' },
+  { match: 'D&I PLumbing and HVAC', price: 125, type: 'Radon', vendor: 'D&I Plumbing and HVAC', visits: 2, phone: '555-0104', email: 'hvac@di.com' },
+  { match: 'D&I PLumbing and HVAC', price: 300, type: 'Sewer', vendor: 'D&I Plumbing and HVAC', visits: 1, phone: '555-0104', email: 'plumbing@di.com' },
+  { match: 'Reid Plumbing', type: 'Sewer', vendor: 'Reid Plumbing', visits: 1, phone: '555-0105', email: 'dispatch@reid.com' },
+  { match: 'Trust Inspection Sewer', type: 'Sewer', vendor: 'Trust Inspection', visits: 1, phone: 'Internal', email: 'Internal' },
+];
+
+const SAMPLE_GCAL_TEXT = `Jessica Mills - 1820 Browning Ave
+Thursday, Apr 2 • 12:00 – 1:15 PM
+
+1820 Browning Ave, Manhattan, KS 66502
+
+Created by Todd Thompson
+termn8u2007@gmail.com
+
+Buyer - Jessica Mills (JessicaMills518)
+Mobile: 8888888888
+jekam9728@gmail.com
+
+Buyer's Agent - Danielle Bergfeld (daniellebergfeld@gmail.com)
+NA
+Mobile: 8165825589
+daniellebergfeld@gmail.com
+
+Services (Total: $975.00)
+1Home Inspection up to 2500 sq. ft. $450.00
+1D&I PLumbing and HVAC $300.00
+1Howell Healthy Homes $125.00
+1Rix Termite $100.00
+
+Report ID: 20260402-1820-Browning-Ave
+Referral: Online Appointment Request
+Utilities On: None
+Who present at inspection: Inspector`;
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [route, setRoute] = useState({ path: 'dashboard', params: {} });
+  
+  // Dashboard State
+  const [jobs, setJobs] = useState([]);
+  const [rawInput, setRawInput] = useState('');
+  const [selectedJobId, setSelectedJobId] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Portal State
+  const [portalJob, setPortalJob] = useState(null);
+  const [agentFormMode, setAgentFormMode] = useState('provideCode');
+  const [vendorWantsCalendar, setVendorWantsCalendar] = useState(false);
+  const [vendorEmail, setVendorEmail] = useState('');
+  const [portalSuccess, setPortalSuccess] = useState(false);
+
+  const selectedJob = jobs.find(j => j.id === selectedJobId) || null;
+
+  // --- ROUTING ENGINE ---
+  useEffect(() => {
+    const handleHashChange = () => {
+      setPortalSuccess(false); // Reset success state when navigating
+      const hash = window.location.hash.replace('#', '');
+      if (!hash) {
+        setRoute({ path: 'dashboard', params: {} });
+        return;
+      }
+      
+      const parts = hash.split('/');
+      if (parts[0] === 'vendor' && parts[1] && parts[2]) {
+        setRoute({ path: 'vendor', params: { jobId: parts[1], serviceId: parts[2] } });
+      } else if (parts[0] === 'agent' && parts[1]) {
+        setRoute({ path: 'agent', params: { jobId: parts[1] } });
+      } else {
+        setRoute({ path: 'dashboard', params: {} });
+      }
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    handleHashChange();
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  // --- FIREBASE INITIALIZATION ---
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Authentication failed:", err);
+      }
+    };
+    initAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      if (!currentUser) setIsLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // --- DATA FETCHING (DASHBOARD vs PORTALS) ---
+  useEffect(() => {
+    if (!user) return;
+    
+    // If on a portal route, we only need to fetch that specific job once.
+    // We use the "public/data" collection so Vendors can access their specific job via the Magic Link.
+    if (route.path === 'vendor' || route.path === 'agent') {
+      const fetchPortalJob = async () => {
+        try {
+          const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'jobs', route.params.jobId);
+          const docSnap = await getDoc(docRef);
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            setPortalJob(data);
+            
+            // Pre-fill vendor email if applicable
+            if (route.path === 'vendor') {
+              const svc = data.services.find(s => s.id === route.params.serviceId);
+              if (svc && svc.email) setVendorEmail(svc.email);
+            }
+          }
+          setIsLoading(false);
+        } catch (err) {
+          console.error("Error fetching portal job:", err);
+          setIsLoading(false);
+        }
+      };
+      fetchPortalJob();
+      return;
+    }
+
+    // If on the dashboard, listen to ALL jobs in real-time
+    const jobsRef = collection(db, 'artifacts', appId, 'public', 'data', 'jobs');
+    const unsubscribe = onSnapshot(jobsRef, (snapshot) => {
+      const loadedJobs = [];
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        // Only show jobs created by Todd
+        if (data.createdBy === user.uid) loadedJobs.push(data);
+      });
+      loadedJobs.sort((a, b) => b.createdAt - a.createdAt);
+      setJobs(loadedJobs);
+      setIsLoading(false);
+    }, (error) => {
+      console.error("Error fetching jobs:", error);
+      setIsLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [user, route.path, route.params.jobId]);
+
+  // --- HELPERS ---
+  const formatDateFriendly = (dateStr) => {
+    if (!dateStr || !dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) return dateStr;
+    const [y, m, d] = dateStr.split('-');
+    const date = new Date(y, m - 1, d);
+    return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+
+  const getRequiredAccessDates = (job) => {
+    if (!job) return [];
+    const dates = new Set();
+    if (job.mainDate) dates.add(job.mainDate);
+    
+    job.services.forEach(s => {
+      if (s.status === 'scheduled') {
+        if (s.schedule.date1) dates.add(s.schedule.date1);
+        if (s.visits === 2 && s.schedule.date2) dates.add(s.schedule.date2);
+      }
+    });
+    return Array.from(dates).sort();
+  };
+
+  const generateMagicLink = (type, jobId, serviceId = null) => {
+    // Uses href.split to safely construct the URL, preventing sandbox formatting bugs
+    const baseUrl = window.location.href.split('#')[0];
+    if (type === 'agent') return `${baseUrl}#agent/${jobId}`;
+    if (type === 'vendor') return `${baseUrl}#vendor/${jobId}/${serviceId}`;
+    return baseUrl;
+  };
+
+  // --- PARSING & DATABASE MUTATIONS ---
+  const handleParse = async () => {
+    if (!rawInput.trim() || !user) return;
+
+    const lines = rawInput.split('\n').map(l => l.trim()).filter(l => l);
+    const jobId = crypto.randomUUID();
+    let job = {
+      id: jobId,
+      createdBy: user.uid,
+      createdAt: Date.now(),
+      title: lines[0],
+      address: '',
+      datetime: lines[1],
+      mainDate: '', 
+      reportId: '',
+      buyer: { name: '', email: '', phone: '' },
+      buyerAgent: { name: '', email: '', phone: '' },
+      services: [],
+      status: 'new', 
+      access: {
+        status: 'pending', 
+        codes: {}, 
+        instructions: '',
+        listingAgent: { name: '', phone: '', email: '' }
+      }
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      if (line.includes(', KS') || line.includes(', MO')) {
+        job.address = line;
+      }
+      
+      if (line.startsWith('Report ID:')) {
+        const rawId = line.replace('Report ID:', '').trim();
+        job.reportId = rawId;
+        const dateMatch = rawId.match(/^(\d{4})(\d{2})(\d{2})/);
+        if (dateMatch) {
+          job.mainDate = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
+        } else {
+          job.mainDate = lines[1].split('•')[0].trim();
+        }
+      }
+
+      if (line.startsWith('Buyer -')) {
+        job.buyer.name = line.replace('Buyer -', '').split('(')[0].trim();
+        if (lines[i+1]?.startsWith('Mobile:')) job.buyer.phone = lines[i+1].replace('Mobile:', '').trim();
+        if (lines[i+2]?.includes('@')) job.buyer.email = lines[i+2].trim();
+      }
+
+      if (line.startsWith("Buyer's Agent -")) {
+        job.buyerAgent.name = line.replace("Buyer's Agent -", '').split('(')[0].trim();
+        let j = i + 1;
+        while(j < i + 4 && j < lines.length) {
+          if (lines[j].startsWith('Mobile:')) job.buyerAgent.phone = lines[j].replace('Mobile:', '').trim();
+          if (lines[j].includes('@') && !lines[j].includes('(')) job.buyerAgent.email = lines[j].trim();
+          j++;
+        }
+      }
+
+      if (line.startsWith('Services (Total:')) {
+        let j = i + 1;
+        while (j < lines.length && !lines[j].startsWith('Report ID:')) {
+          const serviceLine = lines[j];
+          if (!serviceLine.includes('Home Inspection up to')) {
+            let priceStr = serviceLine.match(/\$([0-9.]+)/)?.[1] || "0";
+            let price = parseFloat(priceStr);
+            
+            const matchedVendor = VENDOR_CONFIG.find(v => {
+              const nameMatch = serviceLine.includes(v.match);
+              if (v.price) return nameMatch && price === v.price;
+              return nameMatch;
+            });
+
+            if (matchedVendor) {
+              job.services.push({
+                id: crypto.randomUUID(),
+                ...matchedVendor,
+                rawText: serviceLine,
+                status: 'pending',
+                schedule: { date1: null, date2: null, timeWindow: null, requestedCalendar: false, calendarEmail: '' }
+              });
+            }
+          }
+          j++;
+        }
+      }
+    }
+
+    try {
+      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'jobs', jobId);
+      await setDoc(docRef, job);
+      setRawInput('');
+      setSelectedJobId(jobId);
+    } catch (err) {
+      console.error("Error saving job:", err);
+    }
+  };
+
+  const submitVendorSchedule = async (e) => {
+    e.preventDefault();
+    if (!portalJob || !user) return;
+
+    const fd = new FormData(e.target);
+    const scheduleData = {
+      date1: fd.get('date1'),
+      date2: fd.get('date2'),
+      timeWindow: fd.get('timeWindow'),
+      requestedCalendar: vendorWantsCalendar,
+      calendarEmail: vendorWantsCalendar ? fd.get('calendarEmail') : ''
+    };
+
+    const updatedJob = {
+      ...portalJob,
+      services: portalJob.services.map(s => s.id === route.params.serviceId ? { ...s, status: 'scheduled', schedule: scheduleData } : s)
+    };
+
+    try {
+      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'jobs', portalJob.id);
+      await setDoc(docRef, updatedJob);
+      setPortalSuccess(true);
+    } catch (err) {
+      console.error("Error updating service schedule:", err);
+    }
+  };
+
+  const submitAgentAccess = async (e) => {
+    e.preventDefault();
+    if (!portalJob || !user) return;
+
+    const fd = new FormData(e.target);
+    let updatedJob = { ...portalJob };
+    
+    if (agentFormMode === 'provideCode') {
+      const codes = {};
+      getRequiredAccessDates(portalJob).forEach(date => {
+        codes[date] = fd.get(`code_${date}`);
+      });
+      updatedJob.access = { ...updatedJob.access, status: 'provided', codes, instructions: fd.get('notes') };
+    } else {
+      updatedJob.access = { 
+        ...updatedJob.access, 
+        status: 'waiting_on_listing_agent', 
+        listingAgent: { name: fd.get('la_name'), phone: fd.get('la_phone'), email: fd.get('la_email') } 
+      };
+    }
+
+    try {
+      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'jobs', portalJob.id);
+      await setDoc(docRef, updatedJob);
+      setPortalSuccess(true);
+    } catch (err) {
+      console.error("Error updating access info:", err);
+    }
+  };
+
+  // --- RENDER HELPERS ---
+  const getJobStatus = (job) => {
+    const allServicesScheduled = job.services.every(s => s.status === 'scheduled');
+    const hasAccessCode = job.access.status === 'provided';
+    if (allServicesScheduled && hasAccessCode) return 'Ready';
+    if (allServicesScheduled || hasAccessCode || job.access.status === 'waiting_on_listing_agent') return 'Partial';
+    return 'Pending';
+  };
+
+  const generateGCalSyncText = (job) => {
+    let text = `\n\n=== 🚧 VENDOR & ACCESS STATUS ===\n`;
+    
+    if (job.access.status === 'provided') {
+      text += `Access Codes:\n`;
+      Object.entries(job.access.codes).forEach(([date, code]) => {
+        text += `  - ${formatDateFriendly(date)}: ${code}\n`;
+      });
+      if (job.access.instructions) text += `Notes: ${job.access.instructions}\n`;
+    } else if (job.access.status === 'waiting_on_listing_agent') {
+      text += `Access: REQUESTED FROM LISTING AGENT (${job.access.listingAgent.name})\n`;
+    } else {
+      text += `Access: PENDING (Waiting on Buyer's Agent)\n`;
+    }
+
+    text += `-------------------------\n`;
+    job.services.forEach(s => {
+      text += `[${s.status === 'scheduled' ? '✓' : ' '}] ${s.type} (${s.vendor}): `;
+      if (s.status === 'scheduled') {
+        if (s.visits === 2) {
+           text += `\n    Drop: ${s.schedule.date1} @ ${s.schedule.timeWindow}\n    Pick: ${s.schedule.date2} @ ${s.schedule.timeWindow}`;
+        } else {
+           text += `${s.schedule.date1} @ ${s.schedule.timeWindow}`;
+        }
+      } else {
+        text += `WAITING ON VENDOR`;
+      }
+      text += `\n`;
+    });
+    return text;
+  };
+
+  // --- DASHBOARD VIEW ---
+  const renderDashboard = () => (
+    <div className="flex flex-col h-screen font-sans bg-slate-100">
+      <header className="bg-slate-900 text-white p-4 shadow-md flex justify-between items-center z-10 shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="bg-blue-600 p-2 rounded-lg">
+            <MapPin size={24} className="text-white" />
+          </div>
+          <h1 className="text-xl font-bold tracking-tight">Trust Inspection Coordinator</h1>
+        </div>
+      </header>
+
+      <div className="flex flex-col md:flex-row gap-4 md:gap-6 p-4 md:p-6 flex-1 overflow-y-auto md:overflow-hidden">
+        {/* Sidebar */}
+        <div className="w-full md:w-[350px] lg:w-1/3 flex flex-col gap-4 shrink-0 md:overflow-hidden">
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 shrink-0">
+            <h2 className="font-bold text-slate-800 flex items-center gap-2 mb-3">
+              <Plus size={18} /> New Appointment
+            </h2>
+            <textarea 
+              className="w-full h-32 p-3 text-sm border rounded-lg bg-slate-50 focus:ring-2 focus:ring-blue-500 outline-none"
+              placeholder="Paste GCal text here..."
+              value={rawInput}
+              onChange={(e) => setRawInput(e.target.value)}
+            />
+            <div className="flex gap-2 mt-3">
+              <button 
+                onClick={() => setRawInput(SAMPLE_GCAL_TEXT)}
+                className="px-3 py-2 text-sm text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg flex-1 font-medium transition-colors"
+              >
+                Load Sample
+              </button>
+              <button 
+                onClick={handleParse}
+                className="px-3 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex-1 font-medium transition-colors shadow-sm"
+              >
+                Create Job
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex-1 overflow-y-auto max-h-[40vh] md:max-h-full">
+            <h2 className="font-bold text-slate-800 flex items-center gap-2 mb-3">
+              <ClipboardList size={18} /> Active Jobs
+            </h2>
+            {jobs.length === 0 ? (
+              <div className="text-center text-slate-400 py-8 text-sm">No active jobs. Parse an event to begin.</div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {jobs.map(job => (
+                  <div 
+                    key={job.id} 
+                    onClick={() => setSelectedJobId(job.id)}
+                    className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedJobId === job.id ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}
+                  >
+                    <div className="font-medium text-slate-800 text-sm truncate">{job.address.split(',')[0]}</div>
+                    <div className="text-xs text-slate-500 mt-1 flex justify-between">
+                      <span>{job.datetime.split('•')[0]}</span>
+                      <span className={`px-2 py-0.5 rounded-full font-medium ${getJobStatus(job) === 'Ready' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                        {getJobStatus(job)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Main Content */}
+        <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col min-h-[600px] md:min-h-0 overflow-hidden mt-4 md:mt-0">
+          {selectedJob ? (
+            <div className="p-6 h-full overflow-y-auto">
+              <div className="flex justify-between items-start mb-6">
+                <div>
+                  <h1 className="text-2xl font-bold text-slate-800">{selectedJob.address.split(',')[0]}</h1>
+                  <p className="text-slate-500 flex items-center gap-1 mt-1"><MapPin size={16}/> {selectedJob.address}</p>
+                </div>
+                <div className="text-right">
+                  <div className="text-slate-800 font-medium flex items-center justify-end gap-1"><Calendar size={16}/> {selectedJob.datetime}</div>
+                  <div className="text-slate-500 text-sm mt-1">ID: {selectedJob.reportId}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 lg:gap-6 mb-8">
+                <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
+                  <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">Client Info</h3>
+                  <p className="font-medium text-slate-800 flex items-center gap-2"><User size={16}/> {selectedJob.buyer.name}</p>
+                  <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Phone size={14}/> {selectedJob.buyer.phone}</p>
+                </div>
+                <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
+                  <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">Buyer's Agent</h3>
+                  <p className="font-medium text-slate-800 flex items-center gap-2"><User size={16}/> {selectedJob.buyerAgent.name}</p>
+                  <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Phone size={14}/> {selectedJob.buyerAgent.phone}</p>
+                  
+                  {selectedJob.access.status === 'provided' ? (
+                    <div className="mt-3 p-3 bg-emerald-50 border border-emerald-100 rounded-md">
+                      <div className="text-xs text-emerald-700 font-bold uppercase mb-2">Access Codes Received</div>
+                      <div className="space-y-2">
+                        {Object.entries(selectedJob.access.codes).map(([date, code]) => (
+                          <div key={date} className="flex justify-between items-center text-sm border-b border-emerald-100 pb-1 last:border-0 last:pb-0">
+                            <span className="text-emerald-800 font-medium">{formatDateFriendly(date)}</span>
+                            <span className="font-mono font-bold text-emerald-900">{code}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : selectedJob.access.status === 'waiting_on_listing_agent' ? (
+                    <div className="mt-3 p-2 bg-orange-50 border border-orange-100 rounded-md">
+                      <div className="text-xs text-orange-700 font-bold uppercase mb-1">Waiting on Listing Agent</div>
+                      <div className="text-sm text-orange-900">{selectedJob.access.listingAgent.name} ({selectedJob.access.listingAgent.phone})</div>
+                    </div>
+                  ) : (
+                    <div className="mt-3">
+                      {!selectedJob.services.every(s => s.status === 'scheduled') ? (
+                        <div className="p-2 bg-yellow-50 border border-yellow-200 text-yellow-700 text-sm font-medium rounded flex items-center gap-2">
+                          <Clock size={16} /> Waiting for Vendors to schedule...
+                        </div>
+                      ) : (
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => window.location.hash = `agent/${selectedJob.id}`}
+                            className="flex-1 px-3 py-1.5 bg-emerald-100 text-emerald-800 hover:bg-emerald-200 font-medium text-sm rounded transition-colors flex items-center justify-center gap-2"
+                          >
+                            Open Portal
+                          </button>
+                          <button 
+                            onClick={() => navigator.clipboard.writeText(generateMagicLink('agent', selectedJob.id))}
+                            className="px-3 py-1.5 border border-slate-300 hover:bg-slate-100 text-slate-600 rounded transition-colors"
+                            title="Copy Link"
+                          >
+                            <LinkIcon size={16}/>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2 border-b pb-2">
+                <Truck size={20} /> Vendor Coordination
+              </h3>
+              
+              <div className="space-y-4 mb-8">
+                {selectedJob.services.map(service => (
+                  <div key={service.id} className="border border-slate-200 rounded-lg p-4 flex justify-between items-center">
+                    <div>
+                      <div className="font-bold text-slate-800">{service.type} Inspection</div>
+                      <div className="text-sm text-slate-500">{service.vendor}</div>
+                      
+                      {service.status === 'scheduled' && (
+                        <div className="mt-2 text-sm font-medium text-green-700 bg-green-50 px-3 py-1.5 rounded-md inline-block">
+                          {service.visits === 2 ? (
+                            <>
+                              <div>Drop: {service.schedule.date1} @ {service.schedule.timeWindow}</div>
+                              <div>Pick: {service.schedule.date2} @ {service.schedule.timeWindow}</div>
+                            </>
+                          ) : (
+                            <div>Scheduled: {service.schedule.date1} @ {service.schedule.timeWindow}</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    
+                    {service.status === 'pending' ? (
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => window.location.hash = `vendor/${selectedJob.id}/${service.id}`}
+                          className="px-4 py-2 bg-blue-50 text-blue-700 font-medium text-sm rounded-lg hover:bg-blue-100 flex items-center gap-2 transition-colors"
+                        >
+                           Open Portal
+                        </button>
+                        <button 
+                          onClick={() => navigator.clipboard.writeText(generateMagicLink('vendor', selectedJob.id, service.id))}
+                          className="px-3 py-1.5 border border-slate-300 hover:bg-slate-100 text-slate-600 rounded-lg transition-colors"
+                          title="Copy Link"
+                        >
+                          <LinkIcon size={16}/>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 text-green-600 font-medium text-sm">
+                        <CheckCircle size={18}/> Confirmed
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Generated GCal Text */}
+              <div className="bg-slate-900 rounded-xl p-5 text-slate-300">
+                <div className="flex justify-between items-center mb-3">
+                  <h4 className="font-medium text-white flex items-center gap-2">
+                    <RefreshCw size={16} /> GCal Description Output
+                  </h4>
+                  <button 
+                    onClick={() => navigator.clipboard.writeText(generateGCalSyncText(selectedJob))}
+                    className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1 rounded transition-colors"
+                  >
+                    Copy to Clipboard
+                  </button>
+                </div>
+                <pre className="text-xs whitespace-pre-wrap font-mono bg-slate-950 p-4 rounded-lg border border-slate-800">
+                  {generateGCalSyncText(selectedJob)}
+                </pre>
+              </div>
+
+            </div>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
+              <Calendar size={48} className="mb-4 opacity-20" />
+              <p>Select a job from the left panel</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  // --- VENDOR PORTAL VIEW ---
+  const renderVendorPortal = () => {
+    if (!portalJob) return <div className="p-8 text-center text-slate-500">Loading Job Details...</div>;
+    
+    const service = portalJob.services.find(s => s.id === route.params.serviceId);
+    if (!service) return <div className="p-8 text-center text-red-500">Service not found.</div>;
+
+    if (portalSuccess || service.status === 'scheduled') {
+      return (
+        <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl p-8 max-w-md w-full text-center border border-slate-200">
+            <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
+              <CheckCircle size={32} />
+            </div>
+            <h2 className="text-2xl font-bold text-slate-800 mb-2">Schedule Confirmed</h2>
+            <p className="text-slate-600 mb-6">Thank you! Trust Inspection has been notified of your schedule for {portalJob.address.split(',')[0]}.</p>
+            <button 
+              onClick={() => window.location.hash = ''}
+              className="px-4 py-2 text-sm text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg font-medium transition-colors"
+            >
+              ← Back to Dashboard
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="min-h-screen bg-slate-100 p-4 md:p-8 font-sans">
+        <div className="max-w-md mx-auto relative">
+          <button 
+            onClick={() => window.location.hash = ''}
+            className="mb-4 px-3 py-1.5 text-sm text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg font-medium transition-colors shadow-sm"
+          >
+            ← Back to Dashboard
+          </button>
+          <div className="bg-white rounded-xl shadow-xl overflow-hidden border border-slate-200">
+            <div className="bg-blue-600 p-6 text-white text-center">
+              <h2 className="text-2xl font-bold">{service.vendor}</h2>
+              <p className="opacity-80 text-sm mt-1">Scheduling Request via Trust Inspection</p>
+            </div>
+            
+            <div className="p-6">
+              <div className="mb-6 p-4 bg-blue-50 rounded-lg text-blue-900 border border-blue-100">
+                <div className="font-bold mb-1">Service Needed: {service.type}</div>
+                <div className="text-sm flex items-start gap-2 mt-2">
+                  <MapPin size={16} className="mt-0.5 flex-shrink-0 text-blue-500" />
+                  <span>{portalJob.address}</span>
+                </div>
+              </div>
+
+              <form onSubmit={submitVendorSchedule}>
+                {service.visits === 2 ? (
+                  <>
+                    <div className="mb-4">
+                      <label className="block text-sm font-bold text-slate-700 mb-1">Drop-off Date (Visit 1)</label>
+                      <input type="date" name="date1" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+                    </div>
+                    <div className="mb-4">
+                      <label className="block text-sm font-bold text-slate-700 mb-1">Pick-up Date (Visit 2)</label>
+                      <input type="date" name="date2" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+                    </div>
+                  </>
+                ) : (
+                  <div className="mb-4">
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Service Date</label>
+                    <input type="date" name="date1" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+                  </div>
+                )}
+                
+                <div className="mb-8">
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Time Window</label>
+                  <select name="timeWindow" className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 bg-white">
+                    <option>Morning (8am - 12pm)</option>
+                    <option>Afternoon (12pm - 4pm)</option>
+                    <option>Late Afternoon (3pm - 6pm)</option>
+                  </select>
+                </div>
+
+                <div className="mb-8 p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={vendorWantsCalendar}
+                      onChange={(e) => setVendorWantsCalendar(e.target.checked)}
+                      className="w-5 h-5 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                    />
+                    <span className="text-sm font-bold text-slate-700">Send me a Calendar Invite</span>
+                  </label>
+                  
+                  {vendorWantsCalendar && (
+                    <div className="mt-3 pt-3 border-t border-slate-200">
+                      <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Calendar Email Address</label>
+                      <input 
+                        type="email" 
+                        name="calendarEmail" 
+                        value={vendorEmail}
+                        onChange={(e) => setVendorEmail(e.target.value)}
+                        placeholder="email@example.com" 
+                        required={vendorWantsCalendar}
+                        className="w-full border-slate-300 rounded-lg p-2 border focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white text-slate-800" 
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-colors shadow-md text-lg">
+                  Confirm Schedule
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // --- AGENT PORTAL VIEW ---
+  const renderAgentPortal = () => {
+    if (!portalJob) return <div className="p-8 text-center text-slate-500">Loading Access Details...</div>;
+    
+    if (portalSuccess || portalJob.access.status !== 'pending') {
+      return (
+        <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl p-8 max-w-md w-full text-center border border-slate-200">
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
+              <CheckCircle size={32} />
+            </div>
+            <h2 className="text-2xl font-bold text-slate-800 mb-2">Information Received</h2>
+            <p className="text-slate-600 mb-6">Thank you! Access coordination for {portalJob.address.split(',')[0]} has been updated.</p>
+            <button 
+              onClick={() => window.location.hash = ''}
+              className="px-4 py-2 text-sm text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg font-medium transition-colors"
+            >
+              ← Back to Dashboard
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    const requiredDates = getRequiredAccessDates(portalJob);
+
+    return (
+      <div className="min-h-screen bg-slate-100 p-4 md:p-8 font-sans">
+        <div className="max-w-md mx-auto relative">
+          <button 
+            onClick={() => window.location.hash = ''}
+            className="mb-4 px-3 py-1.5 text-sm text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg font-medium transition-colors shadow-sm"
+          >
+            ← Back to Dashboard
+          </button>
+          <div className="bg-white rounded-xl shadow-xl overflow-hidden border border-slate-200">
+            <div className="bg-emerald-600 p-6 text-white text-center">
+              <h2 className="text-xl font-bold">Property Access Coordination</h2>
+              <p className="opacity-80 text-sm mt-1">{portalJob.address.split(',')[0]}</p>
+            </div>
+            
+            <div className="p-6">
+              <p className="text-slate-600 text-sm mb-6 leading-relaxed">
+                Hi {portalJob.buyerAgent.name.split(' ')[0]}, we need access instructions for Todd's whole home inspection on <strong>{portalJob.datetime.split('•')[0]}</strong>, as well as for the scheduled vendors.
+              </p>
+
+              <div className="flex bg-slate-100 p-1 rounded-lg mb-6">
+                <button 
+                  onClick={() => setAgentFormMode('provideCode')}
+                  className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${agentFormMode === 'provideCode' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  I'll provide access codes
+                </button>
+                <button 
+                  onClick={() => setAgentFormMode('provideListingAgent')}
+                  className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${agentFormMode === 'provideListingAgent' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Contact Listing Agent
+                </button>
+              </div>
+
+              {agentFormMode === 'provideCode' ? (
+                <form onSubmit={submitAgentAccess}>
+                  <div className="mb-4 space-y-3">
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Access / Lockbox Codes</label>
+                    {requiredDates.map(date => (
+                      <div key={date} className="flex flex-col bg-slate-50 p-3 rounded-lg border border-slate-200 shadow-sm">
+                        <span className="text-xs font-bold text-slate-500 uppercase mb-1">{formatDateFriendly(date)}</span>
+                        <input type="text" name={`code_${date}`} placeholder="e.g. 1234 or SUPRA" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none text-lg font-mono bg-white text-slate-800" />
+                      </div>
+                    ))}
+                  </div>
+                  
+                  <div className="mb-6">
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Special Instructions (Optional)</label>
+                    <textarea name="notes" placeholder="e.g. Back door sticks, beware of dog in backyard" className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none h-24 bg-white text-slate-800"></textarea>
+                  </div>
+
+                  <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl transition-colors shadow-md flex justify-center items-center gap-2 text-lg">
+                    <CheckCircle size={20}/> Submit Access Info
+                  </button>
+                </form>
+              ) : (
+                <form onSubmit={submitAgentAccess}>
+                  <div className="bg-orange-50 border border-orange-100 p-4 rounded-lg text-sm text-orange-800 mb-6 leading-relaxed">
+                    We will automatically contact the Listing Agent to coordinate access for Todd and the vendors.
+                  </div>
+                  <div className="mb-4">
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Listing Agent Name</label>
+                    <input type="text" name="la_name" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none bg-white text-slate-800" />
+                  </div>
+                  <div className="mb-4">
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Mobile Phone (For Texting)</label>
+                    <input type="tel" name="la_phone" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none bg-white text-slate-800" />
+                  </div>
+                  <div className="mb-8">
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Email Address</label>
+                    <input type="email" name="la_email" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none bg-white text-slate-800" />
+                  </div>
+                  <button type="submit" className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 rounded-xl transition-colors shadow-md flex justify-center items-center gap-2 text-lg">
+                    <ArrowRight size={20}/> Forward Request
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // --- ROOT RENDERER ---
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center">
+        <div className="text-slate-500 flex flex-col items-center gap-3">
+          <RefreshCw className="animate-spin" size={32} />
+          <p className="font-medium">Connecting to Database...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (route.path === 'vendor') return renderVendorPortal();
+  if (route.path === 'agent') return renderAgentPortal();
+  return renderDashboard();
+}
