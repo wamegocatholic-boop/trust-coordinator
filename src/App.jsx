@@ -170,7 +170,8 @@ export default function App() {
       const loadedJobs = [];
       snapshot.forEach(doc => {
         const data = doc.data();
-        if (data.createdBy === user.uid) loadedJobs.push(data);
+        // Removed the "if (data.createdBy === user.uid)" filter so all devices can see all jobs during testing
+        loadedJobs.push(data);
       });
       loadedJobs.sort((a, b) => b.createdAt - a.createdAt);
       setJobs(loadedJobs);
