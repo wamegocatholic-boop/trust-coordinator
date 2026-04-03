@@ -457,12 +457,17 @@ export default function App() {
       await setDoc(docRef, updatedJob);
       setPortalSuccess(true);
 
+      const allScheduled = updatedJob.services.every(s => s.status === 'scheduled');
+
       // Trigger Webhook to Make.com
       sendWebhook({
         event: 'vendor_scheduled',
         jobId: portalJob.id,
         address: portalJob.address,
-        vendorService: updatedJob.services.find(s => s.id === route.params.serviceId)
+        vendorService: updatedJob.services.find(s => s.id === route.params.serviceId),
+        allScheduled: allScheduled, // Flag for Make.com to know if it should email the Agent
+        agentEmail: portalJob.buyerAgent.email, // Passing the agent email explicitly
+        agentLink: generateMagicLink('agent', portalJob.id)
       });
 
     } catch (err) {
@@ -501,7 +506,14 @@ export default function App() {
         event: 'agent_access_submitted',
         jobId: portalJob.id,
         address: portalJob.address,
-        accessDetails: updatedJob.access
+        accessDetails: updatedJob.access,
+        vendorContacts: updatedJob.services.map(s => ({
+          vendorName: s.vendor,
+          email: s.email,
+          phone: s.phone,
+          wantsCalendar: s.schedule?.requestedCalendar,
+          calendarEmail: s.schedule?.calendarEmail
+        }))
       });
 
     } catch (err) {
