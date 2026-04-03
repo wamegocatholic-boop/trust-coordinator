@@ -531,10 +531,16 @@ export default function App() {
         formattedAccessText: formattedAccessText,
         vendorContacts: updatedJob.services.map(s => ({
           vendorName: s.vendor,
+          type: s.type, // Added to build event title
           email: s.email,
           phone: s.phone,
           wantsCalendar: s.schedule?.requestedCalendar,
-          calendarEmail: s.schedule?.calendarEmail
+          calendarEmail: s.schedule?.calendarEmail,
+          visits: s.visits,
+          date1: s.schedule?.date1, // Added to set calendar date
+          timeWindow1: s.schedule?.timeWindow1,
+          date2: s.schedule?.date2,
+          timeWindow2: s.schedule?.timeWindow2
         }))
       });
 
