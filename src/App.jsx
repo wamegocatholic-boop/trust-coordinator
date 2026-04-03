@@ -481,12 +481,17 @@ export default function App() {
 
     const fd = new FormData(e.target);
     let updatedJob = { ...portalJob };
+    let formattedAccessText = '';
     
     if (agentFormMode === 'provideCode') {
       const codes = {};
       getRequiredAccessDates(portalJob).forEach(date => {
         codes[date] = fd.get(`code_${date}`);
+        formattedAccessText += `<strong>${formatDateFriendly(date)}:</strong> ${codes[date]}<br>`;
       });
+      if (fd.get('notes')) {
+        formattedAccessText += `<br><strong>Notes:</strong><br>${fd.get('notes')}`;
+      }
       updatedJob.access = { ...updatedJob.access, status: 'provided', codes, instructions: fd.get('notes') };
     } else {
       updatedJob.access = { 
@@ -507,6 +512,7 @@ export default function App() {
         jobId: portalJob.id,
         address: portalJob.address,
         accessDetails: updatedJob.access,
+        formattedAccessText: formattedAccessText,
         vendorContacts: updatedJob.services.map(s => ({
           vendorName: s.vendor,
           email: s.email,
