@@ -52,10 +52,10 @@ Buyer - Jessica Mills (JessicaMills518)
 Mobile: 8888888888
 jekam9728@gmail.com
 
-Buyer's Agent - Danielle Bergfeld (daniellebergfeld@gmail.com)
+Buyer's Agent - NA
 NA
-Mobile: 8165825589
-daniellebergfeld@gmail.com
+Mobile: NA
+NA
 
 Services (Total: $975.00)
 1Home Inspection up to 2500 sq. ft. $450.00
@@ -87,7 +87,7 @@ export default function App() {
 
   // Vendor Manager State
   const [showVendorManager, setShowVendorManager] = useState(false);
-  const [vendorForm, setVendorForm] = useState(null); // null means list view, object means edit/add view
+  const [vendorForm, setVendorForm] = useState(null);
 
   // Portal State
   const [portalJob, setPortalJob] = useState(null);
@@ -130,7 +130,6 @@ export default function App() {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
           await signInWithCustomToken(auth, __initial_auth_token);
         } else if (!auth.currentUser) {
-          // Provide an anonymous session so vendors/agents can read/write their portals without an account
           await signInAnonymously(auth);
         }
       } catch (err) {
@@ -168,10 +167,9 @@ export default function App() {
         }
       };
       fetchPortalJob();
-      return; // Do not fetch all jobs if we are just viewing a portal
+      return; 
     }
 
-    // Only fetch dashboard data if the user is a full Admin (not anonymous)
     if (user.isAnonymous) return;
 
     // Fetch Jobs
@@ -215,7 +213,7 @@ export default function App() {
 
   const handleAdminLogout = async () => {
     await signOut(auth);
-    await signInAnonymously(auth); // Fallback to anonymous so routing logic doesn't crash
+    await signInAnonymously(auth);
   };
 
   const formatDateFriendly = (dateStr) => {
@@ -283,7 +281,7 @@ export default function App() {
 
     try {
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vendors', vendorData.id), vendorData);
-      setVendorForm(null); // Return to list view
+      setVendorForm(null); 
     } catch (err) {
       console.error("Error saving vendor:", err);
     }
@@ -324,6 +322,7 @@ export default function App() {
       status: 'new', 
       access: {
         status: 'pending', 
+        occupancy: '', // New tracking field
         codes: {}, 
         instructions: '',
         listingAgent: { name: '', phone: '', email: '' }
@@ -397,6 +396,12 @@ export default function App() {
       }
     }
 
+    // FSBO / No Buyer's Agent Fallback
+    const agentNameRaw = job.buyerAgent.name.toLowerCase();
+    if (!agentNameRaw || agentNameRaw === 'na' || agentNameRaw === 'n/a' || agentNameRaw === 'none') {
+      job.buyerAgent = { ...job.buyer }; // Copy buyer info to act as the coordinating agent
+    }
+
     try {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'jobs', jobId);
       await setDoc(docRef, job);
@@ -465,8 +470,8 @@ export default function App() {
         jobId: portalJob.id,
         address: portalJob.address,
         vendorService: updatedJob.services.find(s => s.id === route.params.serviceId),
-        allScheduled: allScheduled, // Flag for Make.com to know if it should email the Agent
-        agentEmail: portalJob.buyerAgent.email, // Passing the agent email explicitly
+        allScheduled: allScheduled,
+        agentEmail: portalJob.buyerAgent.email, 
         agentLink: generateMagicLink('agent', portalJob.id)
       });
 
@@ -482,7 +487,11 @@ export default function App() {
     const fd = new FormData(e.target);
     let updatedJob = { ...portalJob };
     let formattedAccessText = '';
+    const occupancy = fd.get('occupancy') || '';
     
+    // Inject Occupancy to the formatted text for Make.com to grab
+    formattedAccessText += `<strong>Property Status:</strong> ${occupancy}<br><br>`;
+
     if (agentFormMode === 'provideCode') {
       const codes = {};
       getRequiredAccessDates(portalJob).forEach(date => {
@@ -492,11 +501,18 @@ export default function App() {
       if (fd.get('notes')) {
         formattedAccessText += `<br><strong>Notes:</strong><br>${fd.get('notes')}`;
       }
-      updatedJob.access = { ...updatedJob.access, status: 'provided', codes, instructions: fd.get('notes') };
+      updatedJob.access = { 
+        ...updatedJob.access, 
+        status: 'provided', 
+        occupancy: occupancy,
+        codes, 
+        instructions: fd.get('notes') 
+      };
     } else {
       updatedJob.access = { 
         ...updatedJob.access, 
         status: 'waiting_on_listing_agent', 
+        occupancy: occupancy,
         listingAgent: { name: fd.get('la_name'), phone: fd.get('la_phone'), email: fd.get('la_email') } 
       };
     }
@@ -539,6 +555,10 @@ export default function App() {
   const generateGCalSyncText = (job) => {
     let text = `\n\n=== 🚧 VENDOR & ACCESS STATUS ===\n`;
     
+    if (job.access.occupancy) {
+      text += `Property Status: ${job.access.occupancy.toUpperCase()}\n`;
+    }
+
     if (job.access.status === 'provided') {
       text += `Access Codes:\n`;
       Object.entries(job.access.codes).forEach(([date, code]) => {
@@ -546,7 +566,7 @@ export default function App() {
       });
       if (job.access.instructions) text += `Notes: ${job.access.instructions}\n`;
     } else if (job.access.status === 'waiting_on_listing_agent') {
-      text += `Access: REQUESTED FROM LISTING AGENT (${job.access.listingAgent.name})\n`;
+      text += `Access: REQUESTED FROM LISTING AGENT/SELLER (${job.access.listingAgent.name})\n`;
     } else {
       text += `Access: PENDING (Waiting on Buyer's Agent)\n`;
     }
@@ -726,13 +746,18 @@ export default function App() {
                   <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Phone size={14}/> {selectedJob.buyer.phone}</p>
                 </div>
                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
-                  <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">Buyer's Agent</h3>
+                  <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">Coordinating Agent</h3>
                   <p className="font-medium text-slate-800 flex items-center gap-2"><User size={16}/> {selectedJob.buyerAgent.name}</p>
                   <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Phone size={14}/> {selectedJob.buyerAgent.phone}</p>
                   
                   {selectedJob.access.status === 'provided' ? (
                     <div className="mt-3 p-3 bg-emerald-50 border border-emerald-100 rounded-md">
-                      <div className="text-xs text-emerald-700 font-bold uppercase mb-2">Access Codes Received</div>
+                      <div className="flex justify-between items-center mb-2">
+                        <div className="text-xs text-emerald-700 font-bold uppercase">Access Codes Received</div>
+                        {selectedJob.access.occupancy && (
+                          <div className="text-xs bg-emerald-200 text-emerald-800 px-2 py-0.5 rounded font-bold">{selectedJob.access.occupancy}</div>
+                        )}
+                      </div>
                       <div className="space-y-2">
                         {Object.entries(selectedJob.access.codes).map(([date, code]) => (
                           <div key={date} className="flex justify-between items-center text-sm border-b border-emerald-100 pb-1 last:border-0 last:pb-0">
@@ -744,7 +769,12 @@ export default function App() {
                     </div>
                   ) : selectedJob.access.status === 'waiting_on_listing_agent' ? (
                     <div className="mt-3 p-2 bg-orange-50 border border-orange-100 rounded-md">
-                      <div className="text-xs text-orange-700 font-bold uppercase mb-1">Waiting on Listing Agent</div>
+                      <div className="flex justify-between items-center mb-1">
+                        <div className="text-xs text-orange-700 font-bold uppercase">Waiting on Agent/Seller</div>
+                        {selectedJob.access.occupancy && (
+                          <div className="text-xs bg-orange-200 text-orange-800 px-2 py-0.5 rounded font-bold">{selectedJob.access.occupancy}</div>
+                        )}
+                      </div>
                       <div className="text-sm text-orange-900">{selectedJob.access.listingAgent.name} ({selectedJob.access.listingAgent.phone})</div>
                     </div>
                   ) : (
@@ -1034,6 +1064,14 @@ export default function App() {
       );
     }
 
+    // Calculate 10-day scheduling window
+    const today = new Date();
+    const minDate = today.toISOString().split('T')[0];
+    
+    const maxDateObj = new Date(portalJob.createdAt);
+    maxDateObj.setDate(maxDateObj.getDate() + 10);
+    const maxDate = maxDateObj.toISOString().split('T')[0];
+
     return (
       <div className="min-h-screen bg-slate-100 p-4 md:p-8 font-sans">
         <div className="max-w-md mx-auto relative mt-6">
@@ -1058,7 +1096,7 @@ export default function App() {
                     <div className="grid grid-cols-2 gap-4 mb-4">
                       <div>
                         <label className="block text-sm font-bold text-slate-700 mb-1">Drop-off Date</label>
-                        <input type="date" name="date1" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+                        <input type="date" name="date1" min={minDate} max={maxDate} required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
                       </div>
                       <div>
                         <label className="block text-sm font-bold text-slate-700 mb-1">Drop-off Time</label>
@@ -1073,7 +1111,7 @@ export default function App() {
                     <div className="grid grid-cols-2 gap-4 mb-8">
                       <div>
                         <label className="block text-sm font-bold text-slate-700 mb-1">Pick-up Date</label>
-                        <input type="date" name="date2" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+                        <input type="date" name="date2" min={minDate} max={maxDate} required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
                       </div>
                       <div>
                         <label className="block text-sm font-bold text-slate-700 mb-1">Pick-up Time</label>
@@ -1089,7 +1127,7 @@ export default function App() {
                   <>
                     <div className="mb-4">
                       <label className="block text-sm font-bold text-slate-700 mb-1">Service Date</label>
-                      <input type="date" name="date1" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+                      <input type="date" name="date1" min={minDate} max={maxDate} required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
                     </div>
                     <div className="mb-8">
                       <label className="block text-sm font-bold text-slate-700 mb-1">Time Window</label>
@@ -1185,12 +1223,21 @@ export default function App() {
                   onClick={() => setAgentFormMode('provideListingAgent')}
                   className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${agentFormMode === 'provideListingAgent' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                 >
-                  Contact Listing Agent
+                  Contact Listing Agent / Seller
                 </button>
               </div>
 
               {agentFormMode === 'provideCode' ? (
                 <form onSubmit={submitAgentAccess}>
+                  <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                    <label className="block text-sm font-bold text-slate-700 mb-2">Is the property currently Vacant or Occupied?</label>
+                    <select name="occupancy" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none text-slate-800 bg-white">
+                      <option value="">Select status...</option>
+                      <option value="Vacant">Vacant</option>
+                      <option value="Occupied">Occupied</option>
+                    </select>
+                  </div>
+
                   <div className="mb-4 space-y-3">
                     <label className="block text-sm font-bold text-slate-700 mb-1">Access / Lockbox Codes</label>
                     {requiredDates.map(date => (
@@ -1213,19 +1260,29 @@ export default function App() {
               ) : (
                 <form onSubmit={submitAgentAccess}>
                   <div className="bg-orange-50 border border-orange-100 p-4 rounded-lg text-sm text-orange-800 mb-6 leading-relaxed">
-                    We will automatically contact the Listing Agent to coordinate access for Todd and the vendors.
+                    We will automatically contact the Listing Agent or Seller to coordinate access for Todd and the vendors.
                   </div>
+                  
+                  <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                    <label className="block text-sm font-bold text-slate-700 mb-2">Is the property currently Vacant or Occupied?</label>
+                    <select name="occupancy" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-orange-500 outline-none text-slate-800 bg-white">
+                      <option value="">Select status...</option>
+                      <option value="Vacant">Vacant</option>
+                      <option value="Occupied">Occupied</option>
+                    </select>
+                  </div>
+
                   <div className="mb-4">
-                    <label className="block text-sm font-bold text-slate-700 mb-1">Listing Agent Name</label>
-                    <input type="text" name="la_name" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none bg-white text-slate-800" />
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Listing Agent / Seller Name</label>
+                    <input type="text" name="la_name" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-orange-500 outline-none bg-white text-slate-800" />
                   </div>
                   <div className="mb-4">
                     <label className="block text-sm font-bold text-slate-700 mb-1">Mobile Phone (For Texting)</label>
-                    <input type="tel" name="la_phone" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none bg-white text-slate-800" />
+                    <input type="tel" name="la_phone" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-orange-500 outline-none bg-white text-slate-800" />
                   </div>
                   <div className="mb-8">
                     <label className="block text-sm font-bold text-slate-700 mb-1">Email Address</label>
-                    <input type="email" name="la_email" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none bg-white text-slate-800" />
+                    <input type="email" name="la_email" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-orange-500 outline-none bg-white text-slate-800" />
                   </div>
                   <button type="submit" className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 rounded-xl transition-colors shadow-md flex justify-center items-center gap-2 text-lg">
                     <ArrowRight size={20}/> Forward Request
