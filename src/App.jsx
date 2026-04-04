@@ -472,6 +472,7 @@ export default function App() {
         vendorService: updatedJob.services.find(s => s.id === route.params.serviceId),
         allScheduled: allScheduled,
         agentEmail: portalJob.buyerAgent.email, 
+        agentPhone: portalJob.buyerAgent.phone, // <--- ADDED PHONE NUMBER FOR TWILIO
         agentLink: generateMagicLink('agent', portalJob.id)
       });
 
@@ -531,13 +532,13 @@ export default function App() {
         formattedAccessText: formattedAccessText,
         vendorContacts: updatedJob.services.map(s => ({
           vendorName: s.vendor,
-          type: s.type, // Added to build event title
+          type: s.type, 
           email: s.email,
           phone: s.phone,
           wantsCalendar: s.schedule?.requestedCalendar,
           calendarEmail: s.schedule?.calendarEmail,
           visits: s.visits,
-          date1: s.schedule?.date1, // Added to set calendar date
+          date1: s.schedule?.date1, 
           timeWindow1: s.schedule?.timeWindow1,
           date2: s.schedule?.date2,
           timeWindow2: s.schedule?.timeWindow2
