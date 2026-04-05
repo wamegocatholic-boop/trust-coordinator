@@ -113,6 +113,10 @@ export default function App() {
         setRoute({ path: 'vendor', params: { jobId: parts[1], serviceId: parts[2] } });
       } else if (parts[0] === 'agent' && parts[1]) {
         setRoute({ path: 'agent', params: { jobId: parts[1] } });
+      } else if (parts[0] === 'privacy') {
+        setRoute({ path: 'privacy', params: {} });
+      } else if (parts[0] === 'terms') {
+        setRoute({ path: 'terms', params: {} });
       } else {
         setRoute({ path: 'dashboard', params: {} });
       }
@@ -1303,6 +1307,62 @@ export default function App() {
     );
   };
 
+  // --- LEGAL PAGES (FOR TWILIO A2P 10DLC COMPLIANCE) ---
+  const renderPrivacyPolicy = () => (
+    <div className="min-h-screen bg-slate-100 p-8 font-sans">
+      <div className="max-w-3xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 p-8">
+        <h1 className="text-3xl font-bold text-slate-800 mb-6">Privacy Policy</h1>
+        <div className="space-y-4 text-slate-600 leading-relaxed">
+          <p><strong>Last Updated:</strong> {new Date().toLocaleDateString()}</p>
+          <p>Trust Inspection Services ("we," "our," or "us") values your privacy. This Privacy Policy explains how we collect, use, and protect your information when you interact with our scheduling and coordination systems.</p>
+          
+          <h2 className="text-xl font-bold text-slate-800 mt-6">1. Information We Collect</h2>
+          <p>We collect information necessary to coordinate home inspections, including names, property addresses, email addresses, and mobile phone numbers of clients, real estate agents, and sub-contractors.</p>
+          
+          <h2 className="text-xl font-bold text-slate-800 mt-6">2. How We Use Your Information</h2>
+          <p>We use your mobile phone number strictly to send transactional SMS messages related to inspection scheduling, vendor coordination, and property access details (lockbox codes).</p>
+          
+          <h2 className="text-xl font-bold text-slate-800 mt-6 text-red-600">3. SMS Data Sharing (Strictly Prohibited)</h2>
+          <p><strong>No mobile information will be shared with third parties/affiliates for marketing/promotional purposes.</strong> All the above categories exclude text messaging originator opt-in data and consent; this information will not be shared with any third parties.</p>
+          
+          <h2 className="text-xl font-bold text-slate-800 mt-6">4. Data Security</h2>
+          <p>We implement standard security measures to protect your personal information from unauthorized access.</p>
+          
+          <p className="mt-8 pt-6 border-t text-sm text-slate-500">If you have any questions about this policy, please contact Todd Thompson at Trust Inspection Services.</p>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderTermsOfService = () => (
+    <div className="min-h-screen bg-slate-100 p-8 font-sans">
+      <div className="max-w-3xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 p-8">
+        <h1 className="text-3xl font-bold text-slate-800 mb-6">Terms and Conditions</h1>
+        <div className="space-y-4 text-slate-600 leading-relaxed">
+          <p><strong>Last Updated:</strong> {new Date().toLocaleDateString()}</p>
+          
+          <h2 className="text-xl font-bold text-slate-800 mt-6">1. Program Description</h2>
+          <p>When you opt-in to the <strong>Trust Inspection Services</strong> SMS program, you agree to receive automated text messages related to real estate inspection scheduling, vendor coordination, and property lockbox access codes.</p>
+          
+          <h2 className="text-xl font-bold text-slate-800 mt-6">2. Message Frequency</h2>
+          <p>Message frequency varies based on the number of inspections you are coordinating with us. You will typically receive 1-3 messages per inspection.</p>
+          
+          <h2 className="text-xl font-bold text-slate-800 mt-6">3. Pricing</h2>
+          <p><strong>Message and data rates may apply.</strong> We do not charge a fee to receive our text messages, but your mobile carrier's standard messaging rates apply.</p>
+          
+          <h2 className="text-xl font-bold text-slate-800 mt-6">4. Opt-Out Instructions</h2>
+          <p>You can cancel the SMS service at any time. Just text <strong>STOP</strong> to the shortcode or number from which you received the message. After you send the SMS message "STOP" to us, we will send you an SMS message to confirm that you have been unsubscribed. After this, you will no longer receive SMS messages from us.</p>
+          
+          <h2 className="text-xl font-bold text-slate-800 mt-6">5. Help Instructions</h2>
+          <p>If you are experiencing issues with the messaging program you can reply with the keyword <strong>HELP</strong> for more assistance, or you can get help directly by contacting Todd Thompson.</p>
+          
+          <h2 className="text-xl font-bold text-slate-800 mt-6">6. Carrier Liability</h2>
+          <p>Carriers are not liable for delayed or undelivered messages.</p>
+        </div>
+      </div>
+    </div>
+  );
+
   // --- ROOT RENDERER ---
   if (isLoading) {
     return (
@@ -1317,6 +1377,8 @@ export default function App() {
 
   if (route.path === 'vendor') return renderVendorPortal();
   if (route.path === 'agent') return renderAgentPortal();
+  if (route.path === 'privacy') return renderPrivacyPolicy();
+  if (route.path === 'terms') return renderTermsOfService();
   
   // Dashboard Route requires Admin Login
   if (!user || user.isAnonymous) return renderLogin();
