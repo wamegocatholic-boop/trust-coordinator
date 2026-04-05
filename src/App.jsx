@@ -492,20 +492,25 @@ export default function App() {
 
     const fd = new FormData(e.target);
     let updatedJob = { ...portalJob };
+    
     let formattedAccessText = '';
+    let plainTextAccess = ''; // <--- NEW PLAIN TEXT VARIABLE FOR SMS/GCAL
     const occupancy = fd.get('occupancy') || '';
     
     // Inject Occupancy to the formatted text for Make.com to grab
     formattedAccessText += `<strong>Property Status:</strong> ${occupancy}<br><br>`;
+    plainTextAccess += `Property Status: ${occupancy}\n\n`;
 
     if (agentFormMode === 'provideCode') {
       const codes = {};
       getRequiredAccessDates(portalJob).forEach(date => {
         codes[date] = fd.get(`code_${date}`);
         formattedAccessText += `<strong>${formatDateFriendly(date)}:</strong> ${codes[date]}<br>`;
+        plainTextAccess += `${formatDateFriendly(date)}: ${codes[date]}\n`;
       });
       if (fd.get('notes')) {
         formattedAccessText += `<br><strong>Notes:</strong><br>${fd.get('notes')}`;
+        plainTextAccess += `\nNotes:\n${fd.get('notes')}`;
       }
       updatedJob.access = { 
         ...updatedJob.access, 
@@ -521,6 +526,7 @@ export default function App() {
         occupancy: occupancy,
         listingAgent: { name: fd.get('la_name'), phone: fd.get('la_phone'), email: fd.get('la_email') } 
       };
+      plainTextAccess += `Access will be coordinated by Listing Agent/Seller:\n${fd.get('la_name')} - ${fd.get('la_phone')}`;
     }
 
     try {
@@ -535,6 +541,7 @@ export default function App() {
         address: portalJob.address,
         accessDetails: updatedJob.access,
         formattedAccessText: formattedAccessText,
+        plainTextAccess: plainTextAccess, // <--- ADDED TO WEBHOOK PAYLOAD
         vendorContacts: updatedJob.services.map(s => ({
           vendorName: s.vendor,
           type: s.type, 
