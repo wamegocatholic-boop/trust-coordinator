@@ -204,7 +204,7 @@ export default function App() {
     };
   }, [user, route.path, route.params.jobId]);
 
-  // --- HELPERS ---
+  // --- HELPERS & TEXT GENERATORS ---
   const handleAdminLogin = async (e) => {
     e.preventDefault();
     setLoginError('');
@@ -246,6 +246,50 @@ export default function App() {
     if (type === 'agent') return `${baseUrl}#agent/${jobId}`;
     if (type === 'vendor') return `${baseUrl}#vendor/${jobId}/${serviceId}`;
     return baseUrl;
+  };
+
+  const getJobStatus = (job) => {
+    const allServicesScheduled = job.services.every(s => s.status === 'scheduled');
+    const hasAccessCode = job.access.status === 'provided';
+    if (allServicesScheduled && hasAccessCode) return 'Ready';
+    if (allServicesScheduled || hasAccessCode || job.access.status === 'waiting_on_listing_agent') return 'Partial';
+    return 'Pending';
+  };
+
+  const generateGCalSyncText = (job) => {
+    let text = `\n\n=== 🚧 VENDOR & ACCESS STATUS ===\n`;
+    
+    if (job.access.occupancy) {
+      text += `Property Status: ${job.access.occupancy.toUpperCase()}\n`;
+    }
+
+    if (job.access.status === 'provided') {
+      text += `Access Codes:\n`;
+      Object.entries(job.access.codes).forEach(([date, code]) => {
+        text += `  - ${formatDateFriendly(date)}: ${code}\n`;
+      });
+      if (job.access.instructions) text += `Notes: ${job.access.instructions}\n`;
+    } else if (job.access.status === 'waiting_on_listing_agent') {
+      text += `Access: REQUESTED FROM LISTING AGENT/SELLER (${job.access.listingAgent.name})\n`;
+    } else {
+      text += `Access: PENDING (Waiting on Buyer's Agent)\n`;
+    }
+
+    text += `-------------------------\n`;
+    job.services.forEach(s => {
+      text += `[${s.status === 'scheduled' ? '✓' : ' '}] ${s.type} (${s.vendor}): `;
+      if (s.status === 'scheduled') {
+        if (s.visits === 2) {
+           text += `\n    Drop: ${s.schedule.date1} @ ${s.schedule.timeWindow1}\n    Pick: ${s.schedule.date2} @ ${s.schedule.timeWindow2}`;
+        } else {
+           text += `${s.schedule.date1} @ ${s.schedule.timeWindow1}`;
+        }
+      } else {
+        text += `WAITING ON VENDOR`;
+      }
+      text += `\n`;
+    });
+    return text;
   };
 
   // WEBHOOK TRIGGER FUNCTION
@@ -475,10 +519,11 @@ export default function App() {
         address: portalJob.address,
         vendorService: updatedJob.services.find(s => s.id === route.params.serviceId),
         allScheduled: allScheduled,
-        agentName: portalJob.buyerAgent.name.split(' ')[0], // <--- ADDED AGENT FIRST NAME
+        agentName: portalJob.buyerAgent.name.split(' ')[0], 
         agentEmail: portalJob.buyerAgent.email, 
         agentPhone: portalJob.buyerAgent.phone,
-        agentLink: generateMagicLink('agent', portalJob.id)
+        agentLink: generateMagicLink('agent', portalJob.id),
+        fullSyncText: generateGCalSyncText(updatedJob) // <--- ADDED GCAL SYNC TEXT
       });
 
     } catch (err) {
@@ -494,10 +539,9 @@ export default function App() {
     let updatedJob = { ...portalJob };
     
     let formattedAccessText = '';
-    let plainTextAccess = ''; // <--- NEW PLAIN TEXT VARIABLE FOR SMS/GCAL
+    let plainTextAccess = '';
     const occupancy = fd.get('occupancy') || '';
     
-    // Inject Occupancy to the formatted text for Make.com to grab
     formattedAccessText += `<strong>Property Status:</strong> ${occupancy}<br><br>`;
     plainTextAccess += `Property Status: ${occupancy}\n\n`;
 
@@ -541,7 +585,8 @@ export default function App() {
         address: portalJob.address,
         accessDetails: updatedJob.access,
         formattedAccessText: formattedAccessText,
-        plainTextAccess: plainTextAccess, // <--- ADDED TO WEBHOOK PAYLOAD
+        plainTextAccess: plainTextAccess,
+        fullSyncText: generateGCalSyncText(updatedJob), // <--- ADDED GCAL SYNC TEXT
         vendorContacts: updatedJob.services.map(s => ({
           vendorName: s.vendor,
           type: s.type, 
@@ -560,51 +605,6 @@ export default function App() {
     } catch (err) {
       console.error("Error updating access info:", err);
     }
-  };
-
-  // --- RENDER HELPERS ---
-  const getJobStatus = (job) => {
-    const allServicesScheduled = job.services.every(s => s.status === 'scheduled');
-    const hasAccessCode = job.access.status === 'provided';
-    if (allServicesScheduled && hasAccessCode) return 'Ready';
-    if (allServicesScheduled || hasAccessCode || job.access.status === 'waiting_on_listing_agent') return 'Partial';
-    return 'Pending';
-  };
-
-  const generateGCalSyncText = (job) => {
-    let text = `\n\n=== 🚧 VENDOR & ACCESS STATUS ===\n`;
-    
-    if (job.access.occupancy) {
-      text += `Property Status: ${job.access.occupancy.toUpperCase()}\n`;
-    }
-
-    if (job.access.status === 'provided') {
-      text += `Access Codes:\n`;
-      Object.entries(job.access.codes).forEach(([date, code]) => {
-        text += `  - ${formatDateFriendly(date)}: ${code}\n`;
-      });
-      if (job.access.instructions) text += `Notes: ${job.access.instructions}\n`;
-    } else if (job.access.status === 'waiting_on_listing_agent') {
-      text += `Access: REQUESTED FROM LISTING AGENT/SELLER (${job.access.listingAgent.name})\n`;
-    } else {
-      text += `Access: PENDING (Waiting on Buyer's Agent)\n`;
-    }
-
-    text += `-------------------------\n`;
-    job.services.forEach(s => {
-      text += `[${s.status === 'scheduled' ? '✓' : ' '}] ${s.type} (${s.vendor}): `;
-      if (s.status === 'scheduled') {
-        if (s.visits === 2) {
-           text += `\n    Drop: ${s.schedule.date1} @ ${s.schedule.timeWindow1}\n    Pick: ${s.schedule.date2} @ ${s.schedule.timeWindow2}`;
-        } else {
-           text += `${s.schedule.date1} @ ${s.schedule.timeWindow1}`;
-        }
-      } else {
-        text += `WAITING ON VENDOR`;
-      }
-      text += `\n`;
-    });
-    return text;
   };
 
   // --- LOGIN VIEW ---
