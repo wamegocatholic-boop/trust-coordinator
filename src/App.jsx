@@ -475,8 +475,9 @@ export default function App() {
         address: portalJob.address,
         vendorService: updatedJob.services.find(s => s.id === route.params.serviceId),
         allScheduled: allScheduled,
+        agentName: portalJob.buyerAgent.name.split(' ')[0], // <--- ADDED AGENT FIRST NAME
         agentEmail: portalJob.buyerAgent.email, 
-        agentPhone: portalJob.buyerAgent.phone, // <--- ADDED PHONE NUMBER FOR TWILIO
+        agentPhone: portalJob.buyerAgent.phone,
         agentLink: generateMagicLink('agent', portalJob.id)
       });
 
