@@ -8,7 +8,11 @@ import {
 
 // --- FIREBASE IMPORTS & SETUP ---
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
+import { 
+  getAuth, signInAnonymously, signInWithCustomToken, 
+  signInWithEmailAndPassword, signOut, onAuthStateChanged, 
+  setPersistence, browserLocalPersistence 
+} from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, onSnapshot, getDoc, deleteDoc } from 'firebase/firestore';
 
 // YOUR LIVE FIREBASE CONFIGURATION
@@ -127,26 +131,44 @@ export default function App() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  // --- FIREBASE INITIALIZATION ---
+  // --- FIREBASE INITIALIZATION & PERSISTENCE ---
   useEffect(() => {
-    const initAuth = async () => {
+    let unsubscribe;
+
+    const initializeAuth = async () => {
       try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else if (!auth.currentUser) {
-          await signInAnonymously(auth);
-        }
+        // Enforce browser persistence so Todd doesn't have to keep logging in
+        await setPersistence(auth, browserLocalPersistence);
+
+        unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+          if (currentUser) {
+            setUser(currentUser);
+            setIsLoading(false);
+          } else {
+            // No saved user found. We fall back to anonymous so the portals still work for vendors/agents
+            try {
+              if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                await signInWithCustomToken(auth, __initial_auth_token);
+              } else {
+                await signInAnonymously(auth);
+              }
+            } catch (err) {
+              console.error("Anonymous auth failed:", err);
+              setIsLoading(false);
+            }
+          }
+        });
       } catch (err) {
-        console.error("Authentication failed:", err);
+        console.error("Auth persistence setup failed:", err);
+        setIsLoading(false);
       }
     };
-    initAuth();
 
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      setIsLoading(false);
-    });
-    return () => unsubscribe();
+    initializeAuth();
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
   }, []);
 
   // --- DATA FETCHING (DASHBOARD vs PORTALS) ---
@@ -217,6 +239,7 @@ export default function App() {
 
   const handleAdminLogout = async () => {
     await signOut(auth);
+    // After logging out, we automatically sign back in anonymously so portals don't break if someone visits
     await signInAnonymously(auth);
   };
 
@@ -303,6 +326,23 @@ export default function App() {
     } catch (err) {
       console.error("Webhook failed to send:", err);
     }
+  };
+
+  const handleResendReminder = (service) => {
+    if (!window.confirm(`Resend scheduling request to ${service.vendor}?`)) return;
+    
+    sendWebhook({
+      event: 'vendor_reminder',
+      jobId: selectedJob.id,
+      address: selectedJob.address,
+      vendorName: service.vendor,
+      email: service.email,
+      phone: service.phone,
+      type: service.type,
+      link: generateMagicLink('vendor', selectedJob.id, service.id)
+    });
+    
+    alert('Reminder sent! Make sure your Make.com scenario is set up to listen for the "vendor_reminder" event.');
   };
 
   // --- VENDOR MANAGEMENT MUTATIONS ---
@@ -611,7 +651,7 @@ export default function App() {
   const renderLogin = () => (
     <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
       <div className="bg-white rounded-xl shadow-xl p-8 max-w-sm w-full border border-slate-200">
-        <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6">
+        <div className="w-16 h-16 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center mx-auto mb-6">
           <Lock size={32} />
         </div>
         <h2 className="text-2xl font-bold text-center text-slate-800 mb-6">Admin Login</h2>
@@ -630,7 +670,7 @@ export default function App() {
               required 
               value={loginEmail}
               onChange={(e) => setLoginEmail(e.target.value)}
-              className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" 
+              className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-purple-500 outline-none text-slate-800" 
             />
           </div>
           <div>
@@ -640,10 +680,10 @@ export default function App() {
               required 
               value={loginPassword}
               onChange={(e) => setLoginPassword(e.target.value)}
-              className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" 
+              className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-purple-500 outline-none text-slate-800" 
             />
           </div>
-          <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-colors shadow-md mt-2">
+          <button type="submit" className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 rounded-xl transition-colors shadow-md mt-2">
             Access Dashboard
           </button>
         </form>
@@ -654,24 +694,24 @@ export default function App() {
   // --- DASHBOARD VIEW ---
   const renderDashboard = () => (
     <div className="flex flex-col h-screen font-sans bg-slate-100">
-      <header className="bg-slate-900 text-white p-4 shadow-md flex justify-between items-center z-10 shrink-0">
+      <header className="bg-[#4a0e4e] text-white p-4 shadow-md flex justify-between items-center z-10 shrink-0">
         <div className="flex items-center gap-3">
-          <div className="bg-blue-600 p-2 rounded-lg">
-            <MapPin size={24} className="text-white" />
+          <div className="bg-white p-1.5 rounded-lg">
+            <span className="text-[#4a0e4e] font-black text-xl leading-none px-1 tracking-tighter">TRUST</span>
           </div>
-          <h1 className="text-xl font-bold tracking-tight hidden sm:block">Trust Inspection Coordinator</h1>
+          <h1 className="text-xl font-bold tracking-tight hidden sm:block">Inspection Coordinator</h1>
           <h1 className="text-xl font-bold tracking-tight sm:hidden">Coordinator</h1>
         </div>
         <div className="flex items-center gap-2">
           <button 
             onClick={() => setShowVendorManager(true)}
-            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border border-slate-700"
+            className="flex items-center gap-2 bg-[#330a36] hover:bg-[#220724] px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border border-purple-900"
           >
             <Settings size={16} /> <span className="hidden sm:inline">Vendors</span>
           </button>
           <button 
             onClick={handleAdminLogout}
-            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border border-slate-700 text-red-400 hover:text-red-300"
+            className="flex items-center gap-2 bg-[#330a36] hover:bg-[#220724] px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border border-purple-900 text-red-400 hover:text-red-300"
             title="Log Out"
           >
             <LogOut size={16} />
@@ -684,10 +724,10 @@ export default function App() {
         <div className="w-full md:w-[350px] lg:w-1/3 flex flex-col gap-4 shrink-0 md:overflow-hidden">
           <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 shrink-0">
             <h2 className="font-bold text-slate-800 flex items-center gap-2 mb-3">
-              <Plus size={18} /> New Appointment
+              <Plus size={18} className="text-purple-600" /> New Appointment
             </h2>
             <textarea 
-              className="w-full h-32 p-3 text-sm border rounded-lg bg-slate-50 focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full h-32 p-3 text-sm border rounded-lg bg-slate-50 focus:ring-2 focus:ring-purple-500 outline-none"
               placeholder="Paste GCal text here..."
               value={rawInput}
               onChange={(e) => setRawInput(e.target.value)}
@@ -701,7 +741,7 @@ export default function App() {
               </button>
               <button 
                 onClick={handleParse}
-                className="px-3 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex-1 font-medium transition-colors shadow-sm"
+                className="px-3 py-2 text-sm text-white bg-purple-600 hover:bg-purple-700 rounded-lg flex-1 font-medium transition-colors shadow-sm"
               >
                 Create Job
               </button>
@@ -710,7 +750,7 @@ export default function App() {
 
           <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex-1 overflow-y-auto max-h-[40vh] md:max-h-full">
             <h2 className="font-bold text-slate-800 flex items-center gap-2 mb-3">
-              <ClipboardList size={18} /> Active Jobs
+              <ClipboardList size={18} className="text-purple-600" /> Active Jobs
             </h2>
             {jobs.length === 0 ? (
               <div className="text-center text-slate-400 py-8 text-sm">No active jobs. Parse an event to begin.</div>
@@ -720,12 +760,12 @@ export default function App() {
                   <div 
                     key={job.id} 
                     onClick={() => setSelectedJobId(job.id)}
-                    className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedJobId === job.id ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}
+                    className={`p-3 rounded-lg border cursor-pointer transition-all ${selectedJobId === job.id ? 'border-purple-500 bg-purple-50 shadow-sm' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}
                   >
                     <div className="font-medium text-slate-800 text-sm truncate">{job.address.split(',')[0]}</div>
                     <div className="text-xs text-slate-500 mt-1 flex justify-between">
                       <span>{job.datetime.split('•')[0]}</span>
-                      <span className={`px-2 py-0.5 rounded-full font-medium ${getJobStatus(job) === 'Ready' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                      <span className={`px-2 py-0.5 rounded-full font-medium ${getJobStatus(job) === 'Ready' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
                         {getJobStatus(job)}
                       </span>
                     </div>
@@ -743,10 +783,10 @@ export default function App() {
               <div className="flex justify-between items-start mb-6">
                 <div>
                   <h1 className="text-2xl font-bold text-slate-800">{selectedJob.address.split(',')[0]}</h1>
-                  <p className="text-slate-500 flex items-center gap-1 mt-1"><MapPin size={16}/> {selectedJob.address}</p>
+                  <p className="text-slate-500 flex items-center gap-1 mt-1"><MapPin size={16} className="text-purple-500"/> {selectedJob.address}</p>
                 </div>
                 <div className="text-right flex flex-col items-end">
-                  <div className="text-slate-800 font-medium flex items-center justify-end gap-1"><Calendar size={16}/> {selectedJob.datetime}</div>
+                  <div className="text-slate-800 font-medium flex items-center justify-end gap-1"><Calendar size={16} className="text-purple-500"/> {selectedJob.datetime}</div>
                   <div className="text-slate-500 text-sm mt-1 mb-3">ID: {selectedJob.reportId}</div>
                   
                   <button 
@@ -761,13 +801,13 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 lg:gap-6 mb-8">
                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
                   <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">Client Info</h3>
-                  <p className="font-medium text-slate-800 flex items-center gap-2"><User size={16}/> {selectedJob.buyer.name}</p>
-                  <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Phone size={14}/> {selectedJob.buyer.phone}</p>
+                  <p className="font-medium text-slate-800 flex items-center gap-2"><User size={16} className="text-purple-500"/> {selectedJob.buyer.name}</p>
+                  <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Phone size={14} className="text-purple-400"/> {selectedJob.buyer.phone}</p>
                 </div>
                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
                   <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">Coordinating Agent</h3>
-                  <p className="font-medium text-slate-800 flex items-center gap-2"><User size={16}/> {selectedJob.buyerAgent.name}</p>
-                  <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Phone size={14}/> {selectedJob.buyerAgent.phone}</p>
+                  <p className="font-medium text-slate-800 flex items-center gap-2"><User size={16} className="text-purple-500"/> {selectedJob.buyerAgent.name}</p>
+                  <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Phone size={14} className="text-purple-400"/> {selectedJob.buyerAgent.phone}</p>
                   
                   {selectedJob.access.status === 'provided' ? (
                     <div className="mt-3 p-3 bg-emerald-50 border border-emerald-100 rounded-md">
@@ -799,7 +839,7 @@ export default function App() {
                   ) : (
                     <div className="mt-3">
                       {!selectedJob.services.every(s => s.status === 'scheduled') ? (
-                        <div className="p-2 bg-yellow-50 border border-yellow-200 text-yellow-700 text-sm font-medium rounded flex items-center gap-2">
+                        <div className="p-2 bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium rounded flex items-center gap-2">
                           <Clock size={16} /> Waiting for Vendors to schedule...
                         </div>
                       ) : (
@@ -825,18 +865,21 @@ export default function App() {
               </div>
 
               <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2 border-b pb-2">
-                <Truck size={20} /> Vendor Coordination
+                <Truck size={20} className="text-purple-600"/> Vendor Coordination
               </h3>
               
               <div className="space-y-4 mb-8">
                 {selectedJob.services.map(service => (
-                  <div key={service.id} className="border border-slate-200 rounded-lg p-4 flex justify-between items-center">
+                  <div key={service.id} className="border border-slate-200 rounded-lg p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                     <div>
-                      <div className="font-bold text-slate-800">{service.type} Inspection</div>
+                      <div className="font-bold text-slate-800 flex items-center gap-2">
+                        {service.type} Inspection
+                        {service.status === 'pending' && <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded uppercase font-bold">Request Sent</span>}
+                      </div>
                       <div className="text-sm text-slate-500">{service.vendor}</div>
                       
                       {service.status === 'scheduled' && (
-                        <div className="mt-2 text-sm font-medium text-green-700 bg-green-50 px-3 py-1.5 rounded-md inline-block">
+                        <div className="mt-2 text-sm font-medium text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-md inline-block border border-emerald-100">
                           {service.visits === 2 ? (
                             <>
                               <div>Drop: {service.schedule.date1} @ {service.schedule.timeWindow1}</div>
@@ -850,23 +893,40 @@ export default function App() {
                     </div>
                     
                     {service.status === 'pending' ? (
-                      <div className="flex gap-2">
-                        <button 
-                          onClick={() => window.location.hash = `vendor/${selectedJob.id}/${service.id}`}
-                          className="px-4 py-2 bg-blue-50 text-blue-700 font-medium text-sm rounded-lg hover:bg-blue-100 flex items-center gap-2 transition-colors"
+                      <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                        <a 
+                          href={`tel:${service.phone}`}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-sm rounded-lg flex items-center justify-center gap-1.5 transition-colors border border-slate-200 flex-1 md:flex-none"
+                          title="Call Vendor"
                         >
-                           Open Portal
-                        </button>
+                          <Phone size={14}/> Call
+                        </a>
                         <button 
-                          onClick={() => navigator.clipboard.writeText(generateMagicLink('vendor', selectedJob.id, service.id))}
-                          className="px-3 py-1.5 border border-slate-300 hover:bg-slate-100 text-slate-600 rounded-lg transition-colors"
-                          title="Copy Link"
+                          onClick={() => handleResendReminder(service)}
+                          className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 font-medium text-sm rounded-lg flex items-center justify-center gap-1.5 transition-colors border border-purple-200 flex-1 md:flex-none"
+                          title="Resend SMS/Email"
                         >
-                          <LinkIcon size={16}/>
+                          <Send size={14}/> Resend
                         </button>
+
+                        <div className="flex gap-2 w-full md:w-auto mt-2 md:mt-0">
+                          <button 
+                            onClick={() => window.location.hash = `vendor/${selectedJob.id}/${service.id}`}
+                            className="px-3 py-1.5 text-slate-600 bg-white font-medium text-sm rounded-lg hover:bg-slate-50 border border-slate-300 transition-colors flex-1 md:flex-none text-center"
+                          >
+                             Portal
+                          </button>
+                          <button 
+                            onClick={() => navigator.clipboard.writeText(generateMagicLink('vendor', selectedJob.id, service.id))}
+                            className="px-3 py-1.5 border border-slate-300 hover:bg-slate-100 text-slate-600 rounded-lg transition-colors flex-shrink-0"
+                            title="Copy Portal Link"
+                          >
+                            <LinkIcon size={16}/>
+                          </button>
+                        </div>
                       </div>
                     ) : (
-                      <div className="flex items-center gap-1 text-green-600 font-medium text-sm">
+                      <div className="flex items-center gap-1 text-emerald-600 font-medium text-sm">
                         <CheckCircle size={18}/> Confirmed
                       </div>
                     )}
@@ -878,7 +938,7 @@ export default function App() {
               <div className="bg-slate-900 rounded-xl p-5 text-slate-300">
                 <div className="flex justify-between items-center mb-3">
                   <h4 className="font-medium text-white flex items-center gap-2">
-                    <RefreshCw size={16} /> GCal Description Output
+                    <RefreshCw size={16} className="text-purple-400" /> GCal Description Output
                   </h4>
                   <button 
                     onClick={() => navigator.clipboard.writeText(generateGCalSyncText(selectedJob))}
@@ -895,8 +955,10 @@ export default function App() {
             </div>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
-              <Calendar size={48} className="mb-4 opacity-20" />
-              <p>Select a job from the left panel</p>
+              <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mb-4">
+                <Calendar size={32} className="text-slate-300" />
+              </div>
+              <p className="font-medium">Select a job from the left panel</p>
             </div>
           )}
 
@@ -933,11 +995,11 @@ export default function App() {
           {showVendorManager && (
             <div className="absolute inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
-                <div className="bg-slate-800 text-white p-4 flex justify-between items-center shrink-0">
+                <div className="bg-[#4a0e4e] text-white p-4 flex justify-between items-center shrink-0">
                   <h2 className="text-lg font-bold flex items-center gap-2">
-                    <Settings size={20} /> Vendor Database Configuration
+                    <Settings size={20} className="text-purple-300"/> Vendor Database Configuration
                   </h2>
-                  <button onClick={() => { setShowVendorManager(false); setVendorForm(null); }} className="text-slate-300 hover:text-white transition-colors">
+                  <button onClick={() => { setShowVendorManager(false); setVendorForm(null); }} className="text-purple-200 hover:text-white transition-colors">
                     <X size={24} />
                   </button>
                 </div>
@@ -947,23 +1009,23 @@ export default function App() {
                     <form onSubmit={handleSaveVendor} className="space-y-4">
                       <div className="flex justify-between items-center mb-4">
                         <h3 className="text-lg font-bold text-slate-800">{vendorForm.id ? 'Edit Vendor' : 'Add New Vendor'}</h3>
-                        <button type="button" onClick={() => setVendorForm(null)} className="text-sm text-blue-600 hover:underline">← Back to List</button>
+                        <button type="button" onClick={() => setVendorForm(null)} className="text-sm text-purple-600 hover:underline">← Back to List</button>
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="bg-blue-50 p-4 rounded-lg md:col-span-2 border border-blue-100">
-                          <label className="block text-sm font-bold text-blue-900 mb-1">GCal Match Text (Exact String)</label>
-                          <p className="text-xs text-blue-700 mb-2">The exact text from Home Gauge/Google Calendar that triggers this vendor (e.g. "Rix Termite").</p>
-                          <input type="text" name="match" defaultValue={vendorForm.match} required className="w-full border-blue-200 rounded p-2 outline-none focus:ring-2 focus:ring-blue-500" />
+                        <div className="bg-purple-50 p-4 rounded-lg md:col-span-2 border border-purple-100">
+                          <label className="block text-sm font-bold text-purple-900 mb-1">GCal Match Text (Exact String)</label>
+                          <p className="text-xs text-purple-700 mb-2">The exact text from Home Gauge/Google Calendar that triggers this vendor (e.g. "Rix Termite").</p>
+                          <input type="text" name="match" defaultValue={vendorForm.match} required className="w-full border-purple-200 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
                         </div>
 
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">Vendor/Company Name</label>
-                          <input type="text" name="vendor" defaultValue={vendorForm.vendor} required className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-blue-500" />
+                          <input type="text" name="vendor" defaultValue={vendorForm.vendor} required className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
                         </div>
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">Service Type</label>
-                          <select name="type" defaultValue={vendorForm.type || 'Termite'} className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+                          <select name="type" defaultValue={vendorForm.type || 'Termite'} className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500 bg-white">
                             <option>Termite</option>
                             <option>Radon</option>
                             <option>Sewer</option>
@@ -973,15 +1035,15 @@ export default function App() {
                         </div>
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">Phone Number</label>
-                          <input type="text" name="phone" defaultValue={vendorForm.phone} required className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-blue-500" />
+                          <input type="text" name="phone" defaultValue={vendorForm.phone} required className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
                         </div>
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">Email Address</label>
-                          <input type="email" name="email" defaultValue={vendorForm.email} required className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-blue-500" />
+                          <input type="email" name="email" defaultValue={vendorForm.email} required className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
                         </div>
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">Required Visits</label>
-                          <select name="visits" defaultValue={vendorForm.visits || 1} className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+                          <select name="visits" defaultValue={vendorForm.visits || 1} className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500 bg-white">
                             <option value={1}>1 Visit (Standard)</option>
                             <option value={2}>2 Visits (Drop-off & Pick-up)</option>
                           </select>
@@ -989,13 +1051,13 @@ export default function App() {
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">Price Filter (Optional)</label>
                           <p className="text-xs text-slate-500 mb-1">Only use if vendor offers multiple services under same name.</p>
-                          <input type="number" step="0.01" name="price" defaultValue={vendorForm.price} placeholder="e.g. 125" className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-blue-500" />
+                          <input type="number" step="0.01" name="price" defaultValue={vendorForm.price} placeholder="e.g. 125" className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
                         </div>
                       </div>
 
                       <div className="pt-4 flex justify-end gap-3 border-t mt-6">
                         <button type="button" onClick={() => setVendorForm(null)} className="px-4 py-2 font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">Cancel</button>
-                        <button type="submit" className="px-6 py-2 font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">Save Vendor</button>
+                        <button type="submit" className="px-6 py-2 font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors">Save Vendor</button>
                       </div>
                     </form>
                   ) : (
@@ -1004,7 +1066,7 @@ export default function App() {
                         <p className="text-slate-600 text-sm flex-1">Configure the vendors that the system will automatically match when parsing calendar descriptions.</p>
                         <button 
                           onClick={() => setVendorForm({})}
-                          className="px-4 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold text-sm rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap"
+                          className="px-4 py-2 bg-purple-50 text-purple-700 hover:bg-purple-100 font-bold text-sm rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap"
                         >
                           <Plus size={16} /> Add Vendor
                         </button>
@@ -1025,7 +1087,7 @@ export default function App() {
                       ) : (
                         <div className="space-y-3">
                           {vendors.map(v => (
-                            <div key={v.id} className="border border-slate-200 p-4 rounded-lg flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-blue-300 transition-colors">
+                            <div key={v.id} className="border border-slate-200 p-4 rounded-lg flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-purple-300 transition-colors">
                               <div>
                                 <div className="flex items-center gap-2">
                                   <h3 className="font-bold text-slate-800 text-lg">{v.vendor}</h3>
@@ -1035,12 +1097,12 @@ export default function App() {
                                   <span className="flex items-center gap-1"><Phone size={14}/> {v.phone}</span>
                                   <span className="flex items-center gap-1"><Mail size={14}/> {v.email}</span>
                                 </div>
-                                <div className="text-xs text-blue-600 mt-2 font-mono bg-blue-50 inline-block px-2 py-1 rounded">
+                                <div className="text-xs text-purple-600 mt-2 font-mono bg-purple-50 inline-block px-2 py-1 rounded border border-purple-100">
                                   Match: "{v.match}" {v.price ? ` @ $${v.price}` : ''}
                                 </div>
                               </div>
                               <div className="flex items-center gap-2 shrink-0">
-                                <button onClick={() => setVendorForm(v)} className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                                <button onClick={() => setVendorForm(v)} className="p-2 text-slate-500 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors">
                                   <Edit2 size={18} />
                                 </button>
                                 <button onClick={() => handleDeleteVendor(v.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
@@ -1073,7 +1135,7 @@ export default function App() {
       return (
         <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl p-8 max-w-md w-full text-center border border-slate-200">
-            <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4">
               <CheckCircle size={32} />
             </div>
             <h2 className="text-2xl font-bold text-slate-800 mb-2">Schedule Confirmed</h2>
@@ -1095,16 +1157,16 @@ export default function App() {
       <div className="min-h-screen bg-slate-100 p-4 md:p-8 font-sans">
         <div className="max-w-md mx-auto relative mt-6">
           <div className="bg-white rounded-xl shadow-xl overflow-hidden border border-slate-200">
-            <div className="bg-blue-600 p-6 text-white text-center">
+            <div className="bg-[#4a0e4e] p-6 text-white text-center">
               <h2 className="text-2xl font-bold">{service.vendor}</h2>
-              <p className="opacity-80 text-sm mt-1">Scheduling Request via Trust Inspection</p>
+              <p className="text-purple-200 text-sm mt-1">Scheduling Request via Trust Inspection</p>
             </div>
             
             <div className="p-6">
-              <div className="mb-6 p-4 bg-blue-50 rounded-lg text-blue-900 border border-blue-100">
+              <div className="mb-6 p-4 bg-purple-50 rounded-lg text-purple-900 border border-purple-100">
                 <div className="font-bold mb-1">Service Needed: {service.type}</div>
                 <div className="text-sm flex items-start gap-2 mt-2">
-                  <MapPin size={16} className="mt-0.5 flex-shrink-0 text-blue-500" />
+                  <MapPin size={16} className="mt-0.5 flex-shrink-0 text-purple-500" />
                   <span>{portalJob.address}</span>
                 </div>
               </div>
@@ -1115,11 +1177,11 @@ export default function App() {
                     <div className="grid grid-cols-2 gap-4 mb-4">
                       <div>
                         <label className="block text-sm font-bold text-slate-700 mb-1">Drop-off Date</label>
-                        <input type="date" name="date1" min={minDate} max={maxDate} required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+                        <input type="date" name="date1" min={minDate} max={maxDate} required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-purple-500 outline-none text-slate-800" />
                       </div>
                       <div>
                         <label className="block text-sm font-bold text-slate-700 mb-1">Drop-off Time</label>
-                        <select name="timeWindow1" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 bg-white">
+                        <select name="timeWindow1" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-purple-500 outline-none text-slate-800 bg-white">
                           <option value="Morning (8am - 12pm)">Morning</option>
                           <option value="Afternoon (12pm - 4pm)">Afternoon</option>
                           <option value="Late Aft. (3pm - 6pm)">Late Aft.</option>
@@ -1130,11 +1192,11 @@ export default function App() {
                     <div className="grid grid-cols-2 gap-4 mb-8">
                       <div>
                         <label className="block text-sm font-bold text-slate-700 mb-1">Pick-up Date</label>
-                        <input type="date" name="date2" min={minDate} max={maxDate} required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+                        <input type="date" name="date2" min={minDate} max={maxDate} required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-purple-500 outline-none text-slate-800" />
                       </div>
                       <div>
                         <label className="block text-sm font-bold text-slate-700 mb-1">Pick-up Time</label>
-                        <select name="timeWindow2" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 bg-white">
+                        <select name="timeWindow2" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-purple-500 outline-none text-slate-800 bg-white">
                           <option value="Morning (8am - 12pm)">Morning</option>
                           <option value="Afternoon (12pm - 4pm)">Afternoon</option>
                           <option value="Late Aft. (3pm - 6pm)">Late Aft.</option>
@@ -1146,11 +1208,11 @@ export default function App() {
                   <>
                     <div className="mb-4">
                       <label className="block text-sm font-bold text-slate-700 mb-1">Service Date</label>
-                      <input type="date" name="date1" min={minDate} max={maxDate} required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800" />
+                      <input type="date" name="date1" min={minDate} max={maxDate} required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-purple-500 outline-none text-slate-800" />
                     </div>
                     <div className="mb-8">
                       <label className="block text-sm font-bold text-slate-700 mb-1">Time Window</label>
-                      <select name="timeWindow1" className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-blue-500 outline-none text-slate-800 bg-white">
+                      <select name="timeWindow1" className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-purple-500 outline-none text-slate-800 bg-white">
                         <option value="Morning (8am - 12pm)">Morning (8am - 12pm)</option>
                         <option value="Afternoon (12pm - 4pm)">Afternoon (12pm - 4pm)</option>
                         <option value="Late Aft. (3pm - 6pm)">Late Afternoon (3pm - 6pm)</option>
@@ -1165,7 +1227,7 @@ export default function App() {
                       type="checkbox" 
                       checked={vendorWantsCalendar}
                       onChange={(e) => setVendorWantsCalendar(e.target.checked)}
-                      className="w-5 h-5 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                      className="w-5 h-5 text-purple-600 rounded border-slate-300 focus:ring-purple-500"
                     />
                     <span className="text-sm font-bold text-slate-700">Send me a Calendar Invite</span>
                   </label>
@@ -1180,13 +1242,13 @@ export default function App() {
                         onChange={(e) => setVendorEmail(e.target.value)}
                         placeholder="email@example.com" 
                         required={vendorWantsCalendar}
-                        className="w-full border-slate-300 rounded-lg p-2 border focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white text-slate-800" 
+                        className="w-full border-slate-300 rounded-lg p-2 border focus:ring-2 focus:ring-purple-500 outline-none text-sm bg-white text-slate-800" 
                       />
                     </div>
                   )}
                 </div>
 
-                <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-colors shadow-md text-lg">
+                <button type="submit" className="w-full bg-[#4a0e4e] hover:bg-[#330a36] text-white font-bold py-3 rounded-xl transition-colors shadow-md text-lg">
                   Confirm Schedule
                 </button>
               </form>
@@ -1278,13 +1340,13 @@ export default function App() {
                 </form>
               ) : (
                 <form onSubmit={submitAgentAccess}>
-                  <div className="bg-orange-50 border border-orange-100 p-4 rounded-lg text-sm text-orange-800 mb-6 leading-relaxed">
+                  <div className="bg-amber-50 border border-amber-100 p-4 rounded-lg text-sm text-amber-800 mb-6 leading-relaxed">
                     We will automatically contact the Listing Agent or Seller to coordinate access for Todd and the vendors.
                   </div>
                   
                   <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-lg">
                     <label className="block text-sm font-bold text-slate-700 mb-2">Is the property currently Vacant or Occupied?</label>
-                    <select name="occupancy" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-orange-500 outline-none text-slate-800 bg-white">
+                    <select name="occupancy" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-amber-500 outline-none text-slate-800 bg-white">
                       <option value="">Select status...</option>
                       <option value="Vacant">Vacant</option>
                       <option value="Occupied">Occupied</option>
@@ -1293,17 +1355,17 @@ export default function App() {
 
                   <div className="mb-4">
                     <label className="block text-sm font-bold text-slate-700 mb-1">Listing Agent / Seller Name</label>
-                    <input type="text" name="la_name" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-orange-500 outline-none bg-white text-slate-800" />
+                    <input type="text" name="la_name" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-amber-500 outline-none bg-white text-slate-800" />
                   </div>
                   <div className="mb-4">
                     <label className="block text-sm font-bold text-slate-700 mb-1">Mobile Phone (For Texting)</label>
-                    <input type="tel" name="la_phone" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-orange-500 outline-none bg-white text-slate-800" />
+                    <input type="tel" name="la_phone" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-amber-500 outline-none bg-white text-slate-800" />
                   </div>
                   <div className="mb-8">
                     <label className="block text-sm font-bold text-slate-700 mb-1">Email Address</label>
-                    <input type="email" name="la_email" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-orange-500 outline-none bg-white text-slate-800" />
+                    <input type="email" name="la_email" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-amber-500 outline-none bg-white text-slate-800" />
                   </div>
-                  <button type="submit" className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 rounded-xl transition-colors shadow-md flex justify-center items-center gap-2 text-lg">
+                  <button type="submit" className="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 rounded-xl transition-colors shadow-md flex justify-center items-center gap-2 text-lg">
                     <ArrowRight size={20}/> Forward Request
                   </button>
                 </form>
