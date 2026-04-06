@@ -421,10 +421,11 @@ export default function App() {
       buyerAgent: { name: '', email: '', phone: '' },
       services: [],
       status: 'new', 
+      rawGCalText: rawInput, // <-- Added to save the original text for safe appending later
       access: {
         status: 'pending', 
         occupancy: '', 
-        walkthrough: '', // New tracking field
+        walkthrough: '',
         codes: {}, 
         instructions: '',
         listingAgent: { name: '', phone: '', email: '' }
@@ -577,7 +578,8 @@ export default function App() {
         agentEmail: portalJob.buyerAgent.email, 
         agentPhone: portalJob.buyerAgent.phone,
         agentLink: generateMagicLink('agent', portalJob.id),
-        fullSyncText: generateGCalSyncText(updatedJob) // <--- ADDED GCAL SYNC TEXT
+        // Combines original pasted text with the new status block
+        fullSyncText: (portalJob.rawGCalText ? portalJob.rawGCalText : '') + generateGCalSyncText(updatedJob) 
       });
 
     } catch (err) {
@@ -645,7 +647,8 @@ export default function App() {
         accessDetails: updatedJob.access,
         formattedAccessText: formattedAccessText,
         plainTextAccess: plainTextAccess,
-        fullSyncText: generateGCalSyncText(updatedJob), // <--- ADDED GCAL SYNC TEXT
+        // Combines original pasted text with the new status block
+        fullSyncText: (portalJob.rawGCalText ? portalJob.rawGCalText : '') + generateGCalSyncText(updatedJob), 
         vendorContacts: updatedJob.services.map(s => ({
           vendorName: s.vendor,
           type: s.type, 
