@@ -35,12 +35,12 @@ const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/dio2kjm5dmlcydacspdfclfuh4g7
 
 // --- DEFAULT MOCK DATA (For Initial Seeding Only) ---
 const DEFAULT_VENDOR_CONFIG = [
-  { match: 'Rix Termite', type: 'Termite', vendor: 'Rix Pest Control', visits: 1, phone: '555-0101', email: 'dispatch@rix.com' },
+  { match: 'Rix', type: 'Termite', vendor: 'Rix Pest Control', visits: 1, phone: '555-0101', email: 'dispatch@rix.com' },
   { match: 'Kaw Valley', type: 'Termite', vendor: 'Kaw Valley Exterminator', visits: 1, phone: '555-0102', email: 'scheduling@kawvalley.com' },
-  { match: 'Howell Healthy Homes', type: 'Radon', vendor: 'Howell Healthy Homes', visits: 2, phone: '555-0103', email: 'radon@howell.com' },
-  { match: 'D&I PLumbing and HVAC', price: 125, type: 'Radon', vendor: 'D&I Plumbing and HVAC', visits: 2, phone: '555-0104', email: 'hvac@di.com' },
-  { match: 'D&I PLumbing and HVAC', price: 300, type: 'Sewer', vendor: 'D&I Plumbing and HVAC', visits: 1, phone: '555-0104', email: 'plumbing@di.com' },
-  { match: 'Reid Plumbing', type: 'Sewer', vendor: 'Reid Plumbing', visits: 1, phone: '555-0105', email: 'dispatch@reid.com' },
+  { match: 'Howell', type: 'Radon', vendor: 'Howell Healthy Homes', visits: 2, phone: '555-0103', email: 'radon@howell.com' },
+  { match: 'D&I', price: 125, type: 'Radon', vendor: 'D&I Plumbing and HVAC', visits: 2, phone: '555-0104', email: 'hvac@di.com' },
+  { match: 'D&I', price: 300, type: 'Sewer', vendor: 'D&I Plumbing and HVAC', visits: 1, phone: '555-0104', email: 'plumbing@di.com' },
+  { match: 'Reid', type: 'Sewer', vendor: 'Reid Plumbing', visits: 1, phone: '555-0105', email: 'dispatch@reid.com' },
   { match: 'Trust Inspection Sewer', type: 'Sewer', vendor: 'Trust Inspection', visits: 1, phone: 'Internal', email: 'Internal' },
 ];
 
