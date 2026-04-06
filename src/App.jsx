@@ -99,6 +99,9 @@ export default function App() {
   const [vendorWantsCalendar, setVendorWantsCalendar] = useState(false);
   const [vendorEmail, setVendorEmail] = useState('');
   const [portalSuccess, setPortalSuccess] = useState(false);
+  
+  // UI State
+  const [resendStatus, setResendStatus] = useState({});
 
   const selectedJob = jobs.find(j => j.id === selectedJobId) || null;
 
@@ -328,10 +331,12 @@ export default function App() {
     }
   };
 
-  const handleResendReminder = (service) => {
+  const handleResendReminder = async (service) => {
     if (!window.confirm(`Resend scheduling request to ${service.vendor}?`)) return;
     
-    sendWebhook({
+    setResendStatus(prev => ({...prev, [service.id]: 'sending'}));
+    
+    await sendWebhook({
       event: 'vendor_reminder',
       jobId: selectedJob.id,
       address: selectedJob.address,
@@ -342,7 +347,12 @@ export default function App() {
       link: generateMagicLink('vendor', selectedJob.id, service.id)
     });
     
-    alert('Reminder sent! Make sure your Make.com scenario is set up to listen for the "vendor_reminder" event.');
+    setResendStatus(prev => ({...prev, [service.id]: 'sent'}));
+    
+    // Reset button after 3 seconds
+    setTimeout(() => {
+      setResendStatus(prev => ({...prev, [service.id]: null}));
+    }, 3000);
   };
 
   // --- VENDOR MANAGEMENT MUTATIONS ---
@@ -903,10 +913,17 @@ export default function App() {
                         </a>
                         <button 
                           onClick={() => handleResendReminder(service)}
-                          className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 font-medium text-sm rounded-lg flex items-center justify-center gap-1.5 transition-colors border border-purple-200 flex-1 md:flex-none"
+                          disabled={resendStatus[service.id] === 'sending' || resendStatus[service.id] === 'sent'}
+                          className="px-3 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 font-medium text-sm rounded-lg flex items-center justify-center gap-1.5 transition-colors border border-purple-200 flex-1 md:flex-none disabled:opacity-50"
                           title="Resend SMS/Email"
                         >
-                          <Send size={14}/> Resend
+                          {resendStatus[service.id] === 'sending' ? (
+                            <><RefreshCw size={14} className="animate-spin" /> Sending...</>
+                          ) : resendStatus[service.id] === 'sent' ? (
+                            <><CheckCircle size={14} className="text-emerald-600" /> Sent!</>
+                          ) : (
+                            <><Send size={14}/> Resend</>
+                          )}
                         </button>
 
                         <div className="flex gap-2 w-full md:w-auto mt-2 md:mt-0">
