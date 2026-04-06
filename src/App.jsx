@@ -288,6 +288,9 @@ export default function App() {
     if (job.access.occupancy) {
       text += `Property Status: ${job.access.occupancy.toUpperCase()}\n`;
     }
+    if (job.access.walkthrough) {
+      text += `Walkthrough: ${job.access.walkthrough.toUpperCase()}\n`;
+    }
 
     if (job.access.status === 'provided') {
       text += `Access Codes:\n`;
@@ -420,7 +423,8 @@ export default function App() {
       status: 'new', 
       access: {
         status: 'pending', 
-        occupancy: '', // New tracking field
+        occupancy: '', 
+        walkthrough: '', // New tracking field
         codes: {}, 
         instructions: '',
         listingAgent: { name: '', phone: '', email: '' }
@@ -591,9 +595,12 @@ export default function App() {
     let formattedAccessText = '';
     let plainTextAccess = '';
     const occupancy = fd.get('occupancy') || '';
+    const walkthrough = fd.get('walkthrough') || '';
     
-    formattedAccessText += `<strong>Property Status:</strong> ${occupancy}<br><br>`;
-    plainTextAccess += `Property Status: ${occupancy}\n\n`;
+    formattedAccessText += `<strong>Property Status:</strong> ${occupancy}<br>`;
+    formattedAccessText += `<strong>Post-Inspection Walkthrough:</strong> ${walkthrough}<br><br>`;
+    plainTextAccess += `Property Status: ${occupancy}\n`;
+    plainTextAccess += `Post-Inspection Walkthrough: ${walkthrough}\n\n`;
 
     if (agentFormMode === 'provideCode') {
       const codes = {};
@@ -610,6 +617,7 @@ export default function App() {
         ...updatedJob.access, 
         status: 'provided', 
         occupancy: occupancy,
+        walkthrough: walkthrough,
         codes, 
         instructions: fd.get('notes') 
       };
@@ -618,6 +626,7 @@ export default function App() {
         ...updatedJob.access, 
         status: 'waiting_on_listing_agent', 
         occupancy: occupancy,
+        walkthrough: walkthrough,
         listingAgent: { name: fd.get('la_name'), phone: fd.get('la_phone'), email: fd.get('la_email') } 
       };
       plainTextAccess += `Access will be coordinated by Listing Agent/Seller:\n${fd.get('la_name')} - ${fd.get('la_phone')}`;
@@ -823,9 +832,14 @@ export default function App() {
                     <div className="mt-3 p-3 bg-emerald-50 border border-emerald-100 rounded-md">
                       <div className="flex justify-between items-center mb-2">
                         <div className="text-xs text-emerald-700 font-bold uppercase">Access Codes Received</div>
-                        {selectedJob.access.occupancy && (
-                          <div className="text-xs bg-emerald-200 text-emerald-800 px-2 py-0.5 rounded font-bold">{selectedJob.access.occupancy}</div>
-                        )}
+                        <div className="flex gap-1 border-l-2 pl-2">
+                          {selectedJob.access.occupancy && (
+                            <div className="text-[10px] bg-emerald-200 text-emerald-800 px-1.5 py-0.5 rounded font-bold uppercase">{selectedJob.access.occupancy}</div>
+                          )}
+                          {selectedJob.access.walkthrough && (
+                            <div className="text-[10px] bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded font-bold uppercase" title="Walkthrough">WT: {selectedJob.access.walkthrough}</div>
+                          )}
+                        </div>
                       </div>
                       <div className="space-y-2">
                         {Object.entries(selectedJob.access.codes).map(([date, code]) => (
@@ -840,9 +854,14 @@ export default function App() {
                     <div className="mt-3 p-2 bg-orange-50 border border-orange-100 rounded-md">
                       <div className="flex justify-between items-center mb-1">
                         <div className="text-xs text-orange-700 font-bold uppercase">Waiting on Agent/Seller</div>
-                        {selectedJob.access.occupancy && (
-                          <div className="text-xs bg-orange-200 text-orange-800 px-2 py-0.5 rounded font-bold">{selectedJob.access.occupancy}</div>
-                        )}
+                        <div className="flex gap-1 border-l-2 pl-2">
+                          {selectedJob.access.occupancy && (
+                            <div className="text-[10px] bg-orange-200 text-orange-800 px-1.5 py-0.5 rounded font-bold uppercase">{selectedJob.access.occupancy}</div>
+                          )}
+                          {selectedJob.access.walkthrough && (
+                            <div className="text-[10px] bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded font-bold uppercase" title="Walkthrough">WT: {selectedJob.access.walkthrough}</div>
+                          )}
+                        </div>
                       </div>
                       <div className="text-sm text-orange-900">{selectedJob.access.listingAgent.name} ({selectedJob.access.listingAgent.phone})</div>
                     </div>
@@ -1328,6 +1347,14 @@ export default function App() {
               {agentFormMode === 'provideCode' ? (
                 <form onSubmit={submitAgentAccess}>
                   <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                    <label className="block text-sm font-bold text-slate-700 mb-2">Will the buyer and/or agent be present for a walkthrough at the end of the inspection?</label>
+                    <select name="walkthrough" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none text-slate-800 bg-white mb-4">
+                      <option value="">Select answer...</option>
+                      <option value="Yes">Yes</option>
+                      <option value="No">No</option>
+                      <option value="Unsure at this time">Unsure at this time</option>
+                    </select>
+
                     <label className="block text-sm font-bold text-slate-700 mb-2">Is the property currently Vacant or Occupied?</label>
                     <select name="occupancy" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none text-slate-800 bg-white">
                       <option value="">Select status...</option>
@@ -1362,6 +1389,14 @@ export default function App() {
                   </div>
                   
                   <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                    <label className="block text-sm font-bold text-slate-700 mb-2">Will the buyer and/or agent be present for a walkthrough at the end of the inspection?</label>
+                    <select name="walkthrough" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-amber-500 outline-none text-slate-800 bg-white mb-4">
+                      <option value="">Select answer...</option>
+                      <option value="Yes">Yes</option>
+                      <option value="No">No</option>
+                      <option value="Unsure at this time">Unsure at this time</option>
+                    </select>
+
                     <label className="block text-sm font-bold text-slate-700 mb-2">Is the property currently Vacant or Occupied?</label>
                     <select name="occupancy" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-amber-500 outline-none text-slate-800 bg-white">
                       <option value="">Select status...</option>
