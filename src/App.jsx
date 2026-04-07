@@ -421,7 +421,7 @@ export default function App() {
       buyerAgent: { name: '', email: '', phone: '' },
       services: [],
       status: 'new', 
-      rawGCalText: rawInput, // <-- Added to save the original text for safe appending later
+      rawGCalText: rawInput, 
       access: {
         status: 'pending', 
         occupancy: '', 
@@ -514,6 +514,7 @@ export default function App() {
       // Trigger Webhook to Make.com
       sendWebhook({
         event: 'job_created',
+        address: job.address, // <-- FIXED: Makes sure Make.com explicitly gets the address at the root level!
         job: job,
         agentLink: generateMagicLink('agent', job.id),
         vendorLinks: job.services.map(s => ({
@@ -604,8 +605,8 @@ export default function App() {
     plainTextAccess += `Property Status: ${occupancy}\n`;
     plainTextAccess += `Post-Inspection Walkthrough: ${walkthrough}\n\n`;
 
+    const codes = {};
     if (agentFormMode === 'provideCode') {
-      const codes = {};
       getRequiredAccessDates(portalJob).forEach(date => {
         codes[date] = fd.get(`code_${date}`);
         formattedAccessText += `<strong>${formatDateFriendly(date)}:</strong> ${codes[date]}<br>`;
@@ -645,23 +646,48 @@ export default function App() {
         jobId: portalJob.id,
         address: portalJob.address,
         accessDetails: updatedJob.access,
-        formattedAccessText: formattedAccessText,
+        formattedAccessText: formattedAccessText, // Keep global for debugging/history
         plainTextAccess: plainTextAccess,
-        // Combines original pasted text with the new status block
         fullSyncText: (portalJob.rawGCalText ? portalJob.rawGCalText : '') + generateGCalSyncText(updatedJob), 
-        vendorContacts: updatedJob.services.map(s => ({
-          vendorName: s.vendor,
-          type: s.type, 
-          email: s.email,
-          phone: s.phone,
-          wantsCalendar: s.schedule?.requestedCalendar,
-          calendarEmail: s.schedule?.calendarEmail,
-          visits: s.visits,
-          date1: s.schedule?.date1, 
-          timeWindow1: s.schedule?.timeWindow1,
-          date2: s.schedule?.date2,
-          timeWindow2: s.schedule?.timeWindow2
-        }))
+        
+        // Loop through vendors to generate CUSTOM, specific codes for each one!
+        vendorContacts: updatedJob.services.map(s => {
+          let specificHtml = `<strong>Property Status:</strong> ${occupancy}<br><strong>Post-Inspection Walkthrough:</strong> ${walkthrough}<br><br>`;
+          
+          if (agentFormMode === 'provideCode') {
+            const d1 = s.schedule?.date1;
+            const d2 = s.schedule?.date2;
+            
+            if (d1 && codes[d1]) {
+              specificHtml += `<strong>${formatDateFriendly(d1)}:</strong> ${codes[d1]}<br>`;
+            }
+            if (d2 && d2 !== d1 && codes[d2]) {
+              specificHtml += `<strong>${formatDateFriendly(d2)}:</strong> ${codes[d2]}<br>`;
+            }
+            
+            const notes = fd.get('notes');
+            if (notes) {
+              specificHtml += `<br><strong>Notes:</strong><br>${notes}`;
+            }
+          } else {
+            specificHtml += `Access will be coordinated by Listing Agent/Seller:<br>${fd.get('la_name')} - ${fd.get('la_phone')}`;
+          }
+
+          return {
+            vendorName: s.vendor,
+            type: s.type, 
+            email: s.email,
+            phone: s.phone,
+            wantsCalendar: s.schedule?.requestedCalendar,
+            calendarEmail: s.schedule?.calendarEmail,
+            visits: s.visits,
+            date1: s.schedule?.date1, 
+            timeWindow1: s.schedule?.timeWindow1,
+            date2: s.schedule?.date2,
+            timeWindow2: s.schedule?.timeWindow2,
+            vendorSpecificAccessHtml: specificHtml // <-- Passed to Make.com!
+          };
+        })
       });
 
     } catch (err) {
