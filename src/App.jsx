@@ -512,9 +512,9 @@ export default function App() {
       setSelectedJobId(jobId);
 
       // Trigger Webhook to Make.com
-      sendWebhook({
+      await sendWebhook({
         event: 'job_created',
-        address: job.address, // <-- FIXED: Makes sure Make.com explicitly gets the address at the root level!
+        address: job.address,
         job: job,
         agentLink: generateMagicLink('agent', job.id),
         vendorLinks: job.services.map(s => ({
@@ -525,6 +525,22 @@ export default function App() {
           link: generateMagicLink('vendor', job.id, s.id)
         }))
       });
+
+      // NO-VENDOR FAST-TRACK: If no external vendors are needed, instantly trigger the Agent Access Request!
+      if (job.services.length === 0) {
+        await sendWebhook({
+          event: 'vendor_scheduled',
+          jobId: job.id,
+          address: job.address,
+          vendorService: null,
+          allScheduled: true,
+          agentName: job.buyerAgent.name.split(' ')[0], 
+          agentEmail: job.buyerAgent.email, 
+          agentPhone: job.buyerAgent.phone,
+          agentLink: generateMagicLink('agent', job.id),
+          fullSyncText: (job.rawGCalText ? job.rawGCalText : '') + generateGCalSyncText(job) 
+        });
+      }
 
     } catch (err) {
       console.error("Error saving job:", err);
