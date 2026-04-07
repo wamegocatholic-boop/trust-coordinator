@@ -505,19 +505,43 @@ export default function App() {
       job.buyerAgent = { ...job.buyer }; // Copy buyer info to act as the coordinating agent
     }
 
+    // AUTO-SCHEDULE INTERNAL SERVICES (e.g., Todd's Sewer Inspection)
+    job.services = job.services.map(s => {
+      if (s.email === 'Internal' || s.phone === 'Internal') {
+        return {
+          ...s,
+          status: 'scheduled',
+          schedule: {
+            date1: job.mainDate,
+            timeWindow1: job.datetime.split('•')[1]?.trim() || 'At Inspection Time',
+            date2: null, timeWindow2: null,
+            requestedCalendar: false, calendarEmail: ''
+          }
+        };
+      }
+      return s;
+    });
+
     try {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'jobs', jobId);
       await setDoc(docRef, job);
       setRawInput('');
       setSelectedJobId(jobId);
 
+      // Check if Todd is doing a sewer inspection
+      const hasInternalSewer = job.services.some(s => s.email === 'Internal' || s.phone === 'Internal');
+      
+      // Filter out internal services so we don't send them portal emails
+      const externalServices = job.services.filter(s => s.email !== 'Internal' && s.phone !== 'Internal');
+
       // Trigger Webhook to Make.com
       await sendWebhook({
         event: 'job_created',
         address: job.address,
         job: job,
+        hasInternalSewer: hasInternalSewer, // Passed to Make.com so you can trigger text reminders!
         agentLink: generateMagicLink('agent', job.id),
-        vendorLinks: job.services.map(s => ({
+        vendorLinks: externalServices.map(s => ({
           vendorName: s.vendor,
           email: s.email,
           phone: s.phone,
@@ -527,7 +551,7 @@ export default function App() {
       });
 
       // NO-VENDOR FAST-TRACK: If no external vendors are needed, instantly trigger the Agent Access Request!
-      if (job.services.length === 0) {
+      if (externalServices.length === 0) {
         await sendWebhook({
           event: 'vendor_scheduled',
           jobId: job.id,
