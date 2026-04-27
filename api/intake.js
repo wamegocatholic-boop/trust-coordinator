@@ -80,16 +80,26 @@ export default async function handler(req, res) {
 
       if (line.startsWith('Buyer -')) {
         job.buyer.name = line.replace('Buyer -', '').split('(')[0].trim();
-        if (lines[i+1]?.startsWith('Mobile:')) job.buyer.phone = lines[i+1].replace('Mobile:', '').trim();
-        if (lines[i+2]?.includes('@')) job.buyer.email = lines[i+2].trim();
+        let j = i + 1;
+        while(j < i + 7 && j < lines.length && !lines[j].startsWith("Buyer's Agent") && !lines[j].startsWith("Services")) {
+          if (lines[j].startsWith('Mobile:')) job.buyer.phone = lines[j].replace('Mobile:', '').trim();
+          if (lines[j].includes('@')) {
+            const emailMatch = lines[j].match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/);
+            if (emailMatch) job.buyer.email = emailMatch[0];
+          }
+          j++;
+        }
       }
 
       if (line.startsWith("Buyer's Agent -")) {
         job.buyerAgent.name = line.replace("Buyer's Agent -", '').split('(')[0].trim();
         let j = i + 1;
-        while(j < i + 4 && j < lines.length) {
+        while(j < i + 7 && j < lines.length && !lines[j].startsWith('Services')) {
           if (lines[j].startsWith('Mobile:')) job.buyerAgent.phone = lines[j].replace('Mobile:', '').trim();
-          if (lines[j].includes('@') && !lines[j].includes('(')) job.buyerAgent.email = lines[j].trim();
+          if (lines[j].includes('@')) {
+            const emailMatch = lines[j].match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/);
+            if (emailMatch) job.buyerAgent.email = emailMatch[0];
+          }
           j++;
         }
       }
