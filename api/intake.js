@@ -16,6 +16,16 @@ const db = getFirestore(app);
 const appId = 'trust-inspection-coordinator';
 const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/dio2kjm5dmlcydacspdfclfuh4g73dvf";
 
+// The Washing Machine: Cleans up terrible agent formatting
+function sanitizePhone(phone) {
+  if (!phone) return '';
+  let cleaned = phone.replace(/\D/g, ''); // Strips everything but numbers
+  if (cleaned.length === 7) cleaned = '785' + cleaned; // Adds local area code if they forgot it
+  if (cleaned.length === 11 && cleaned.startsWith('1')) cleaned = cleaned.substring(1); // Removes country code if they added it
+  if (cleaned.length === 10) return `${cleaned.slice(0,3)}-${cleaned.slice(3,6)}-${cleaned.slice(6)}`; // Perfect formatting
+  return phone; // Fallback if it's completely weird
+}
+
 export default async function handler(req, res) {
   // 1. Only accept POST requests
   if (req.method !== 'POST') {
@@ -82,7 +92,7 @@ export default async function handler(req, res) {
         job.buyer.name = line.replace('Buyer -', '').split('(')[0].trim();
         let j = i + 1;
         while(j < i + 7 && j < lines.length && !lines[j].startsWith("Buyer's Agent") && !lines[j].startsWith("Services")) {
-          if (lines[j].startsWith('Mobile:')) job.buyer.phone = lines[j].replace('Mobile:', '').trim();
+          if (lines[j].startsWith('Mobile:')) job.buyer.phone = sanitizePhone(lines[j].replace('Mobile:', '').trim());
           if (lines[j].includes('@')) {
             const emailMatch = lines[j].match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/);
             if (emailMatch) job.buyer.email = emailMatch[0];
@@ -95,7 +105,7 @@ export default async function handler(req, res) {
         job.buyerAgent.name = line.replace("Buyer's Agent -", '').split('(')[0].trim();
         let j = i + 1;
         while(j < i + 7 && j < lines.length && !lines[j].startsWith('Services')) {
-          if (lines[j].startsWith('Mobile:')) job.buyerAgent.phone = lines[j].replace('Mobile:', '').trim();
+          if (lines[j].startsWith('Mobile:')) job.buyerAgent.phone = sanitizePhone(lines[j].replace('Mobile:', '').trim());
           if (lines[j].includes('@')) {
             const emailMatch = lines[j].match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/);
             if (emailMatch) job.buyerAgent.email = emailMatch[0];
