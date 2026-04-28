@@ -190,7 +190,8 @@ export default async function handler(req, res) {
           phone: s.phone,
           type: s.type,
           link: `${baseUrl}/#vendor/${job.id}/${s.id}`
-        }))
+        })),
+        fullSyncText: job.rawGCalText
       })
     });
 
