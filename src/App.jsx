@@ -3,7 +3,7 @@ import {
   Calendar, MapPin, User, Phone, Mail, FileText, 
   CheckCircle, Clock, AlertCircle, Send, Key, 
   Truck, ClipboardList, RefreshCw, Plus, ArrowRight, Link as LinkIcon, Trash2,
-  Settings, Edit2, X, Lock, LogOut
+  Settings, Edit2, X, Lock, LogOut, ArrowLeftRight
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS & SETUP ---
@@ -89,9 +89,12 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [jobToDelete, setJobToDelete] = useState(null);
 
-  // Vendor Manager State
+  // Manager States
   const [showVendorManager, setShowVendorManager] = useState(false);
   const [vendorForm, setVendorForm] = useState(null);
+  const [agentEditJob, setAgentEditJob] = useState(null);
+  const [vendorSwapService, setVendorSwapService] = useState(null);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // Portal State
   const [portalJob, setPortalJob] = useState(null);
@@ -140,7 +143,6 @@ export default function App() {
 
     const initializeAuth = async () => {
       try {
-        // Enforce browser persistence so Todd doesn't have to keep logging in
         await setPersistence(auth, browserLocalPersistence);
 
         unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -148,7 +150,6 @@ export default function App() {
             setUser(currentUser);
             setIsLoading(false);
           } else {
-            // No saved user found. We fall back to anonymous so the portals still work for vendors/agents
             try {
               if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                 await signInWithCustomToken(auth, __initial_auth_token);
@@ -242,7 +243,6 @@ export default function App() {
 
   const handleAdminLogout = async () => {
     await signOut(auth);
-    // After logging out, we automatically sign back in anonymously so portals don't break if someone visits
     await signInAnonymously(auth);
   };
 
@@ -334,6 +334,24 @@ export default function App() {
     }
   };
 
+  const handleForceSync = async () => {
+    if (!selectedJob) return;
+    setIsSyncing(true);
+    await sendWebhook({
+      event: 'vendor_scheduled',
+      jobId: selectedJob.id,
+      address: selectedJob.address,
+      vendorService: null,
+      allScheduled: selectedJob.services.every(s => s.status === 'scheduled'),
+      agentName: selectedJob.buyerAgent.name.split(' ')[0],
+      agentEmail: selectedJob.buyerAgent.email,
+      agentPhone: selectedJob.buyerAgent.phone,
+      agentLink: generateMagicLink('agent', selectedJob.id),
+      fullSyncText: (selectedJob.rawGCalText ? selectedJob.rawGCalText : '') + generateGCalSyncText(selectedJob)
+    });
+    setTimeout(() => setIsSyncing(false), 2000);
+  };
+
   const handleResendReminder = async (service) => {
     if (!window.confirm(`Resend scheduling request to ${service.vendor}?`)) return;
     
@@ -352,10 +370,74 @@ export default function App() {
     
     setResendStatus(prev => ({...prev, [service.id]: 'sent'}));
     
-    // Reset button after 3 seconds
     setTimeout(() => {
       setResendStatus(prev => ({...prev, [service.id]: null}));
     }, 3000);
+  };
+
+  // --- MANUAL OVERRIDE MUTATIONS (AGENT EDIT & VENDOR SWAP) ---
+  const submitAgentEdit = async (e) => {
+    e.preventDefault();
+    if (!agentEditJob) return;
+    const fd = new FormData(e.target);
+    const updatedJob = { ...agentEditJob };
+    
+    updatedJob.buyerAgent = {
+      name: fd.get('name') || updatedJob.buyerAgent.name,
+      phone: fd.get('phone') || '',
+      email: fd.get('email') || ''
+    };
+
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'jobs', updatedJob.id), updatedJob);
+      setAgentEditJob(null);
+    } catch (err) {
+      console.error("Error updating agent:", err);
+    }
+  };
+
+  const submitVendorSwap = async (e) => {
+    e.preventDefault();
+    if (!vendorSwapService) return;
+    const fd = new FormData(e.target);
+    const newVendorId = fd.get('newVendorId');
+    const newVendor = vendors.find(v => v.id === newVendorId);
+    
+    const job = jobs.find(j => j.id === vendorSwapService.jobId);
+    const serviceToSwap = vendorSwapService.service;
+
+    // Safely update the original GCal text to reflect the swap
+    const baseRawText = serviceToSwap.rawText.split(' (Swapped')[0];
+    const newRawText = `${baseRawText} (Swapped to ${newVendor.vendor})`;
+    const newGCalText = job.rawGCalText.replace(serviceToSwap.rawText, newRawText);
+
+    const updatedJob = { ...job, rawGCalText: newGCalText };
+    
+    updatedJob.services = job.services.map(s => {
+      if (s.id === serviceToSwap.id) {
+        return {
+          ...s,
+          id: crypto.randomUUID(), // Generate new ID to invalidate the old vendor's portal link
+          vendor: newVendor.vendor,
+          email: newVendor.email,
+          phone: newVendor.phone,
+          visits: newVendor.visits,
+          type: newVendor.type || s.type, // Maintain service type
+          match: newVendor.match,
+          rawText: newRawText,
+          status: 'pending', // Reset to pending so we can re-request
+          schedule: { date1: null, timeWindow1: null, date2: null, timeWindow2: null, requestedCalendar: false, calendarEmail: '' }
+        };
+      }
+      return s;
+    });
+
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'jobs', updatedJob.id), updatedJob);
+      setVendorSwapService(null);
+    } catch (err) {
+      console.error("Error swapping vendor:", err);
+    }
   };
 
   // --- VENDOR MANAGEMENT MUTATIONS ---
@@ -499,13 +581,11 @@ export default function App() {
       }
     }
 
-    // FSBO / No Buyer's Agent Fallback
     const agentNameRaw = job.buyerAgent.name.toLowerCase();
     if (!agentNameRaw || agentNameRaw === 'na' || agentNameRaw === 'n/a' || agentNameRaw === 'none') {
-      job.buyerAgent = { ...job.buyer }; // Copy buyer info to act as the coordinating agent
+      job.buyerAgent = { ...job.buyer }; 
     }
 
-    // AUTO-SCHEDULE INTERNAL SERVICES (e.g., Todd's Sewer Inspection)
     job.services = job.services.map(s => {
       if (s.email === 'Internal' || s.phone === 'Internal') {
         return {
@@ -528,18 +608,14 @@ export default function App() {
       setRawInput('');
       setSelectedJobId(jobId);
 
-      // Check if Todd is doing a sewer inspection
       const hasInternalSewer = job.services.some(s => s.email === 'Internal' || s.phone === 'Internal');
-      
-      // Filter out internal services so we don't send them portal emails
       const externalServices = job.services.filter(s => s.email !== 'Internal' && s.phone !== 'Internal');
 
-      // Trigger Webhook to Make.com
       await sendWebhook({
         event: 'job_created',
         address: job.address,
         job: job,
-        hasInternalSewer: hasInternalSewer, // Passed to Make.com so you can trigger text reminders!
+        hasInternalSewer: hasInternalSewer,
         agentLink: generateMagicLink('agent', job.id),
         vendorLinks: externalServices.map(s => ({
           vendorName: s.vendor,
@@ -550,7 +626,6 @@ export default function App() {
         }))
       });
 
-      // NO-VENDOR FAST-TRACK: If no external vendors are needed, instantly trigger the Agent Access Request!
       if (externalServices.length === 0) {
         await sendWebhook({
           event: 'vendor_scheduled',
@@ -608,7 +683,6 @@ export default function App() {
 
       const allScheduled = updatedJob.services.every(s => s.status === 'scheduled');
 
-      // Trigger Webhook to Make.com
       sendWebhook({
         event: 'vendor_scheduled',
         jobId: portalJob.id,
@@ -619,7 +693,6 @@ export default function App() {
         agentEmail: portalJob.buyerAgent.email, 
         agentPhone: portalJob.buyerAgent.phone,
         agentLink: generateMagicLink('agent', portalJob.id),
-        // Combines original pasted text with the new status block
         fullSyncText: (portalJob.rawGCalText ? portalJob.rawGCalText : '') + generateGCalSyncText(updatedJob) 
       });
 
@@ -680,17 +753,15 @@ export default function App() {
       await setDoc(docRef, updatedJob);
       setPortalSuccess(true);
 
-      // Trigger Webhook to Make.com
       sendWebhook({
         event: 'agent_access_submitted',
         jobId: portalJob.id,
         address: portalJob.address,
         accessDetails: updatedJob.access,
-        formattedAccessText: formattedAccessText, // Keep global for debugging/history
+        formattedAccessText: formattedAccessText,
         plainTextAccess: plainTextAccess,
         fullSyncText: (portalJob.rawGCalText ? portalJob.rawGCalText : '') + generateGCalSyncText(updatedJob), 
         
-        // Loop through vendors to generate CUSTOM, specific codes for each one!
         vendorContacts: updatedJob.services.map(s => {
           let specificHtml = `<strong>Property Status:</strong> ${occupancy}<br><strong>Post-Inspection Walkthrough:</strong> ${walkthrough}<br><br>`;
           
@@ -698,17 +769,11 @@ export default function App() {
             const d1 = s.schedule?.date1;
             const d2 = s.schedule?.date2;
             
-            if (d1 && codes[d1]) {
-              specificHtml += `<strong>${formatDateFriendly(d1)}:</strong> ${codes[d1]}<br>`;
-            }
-            if (d2 && d2 !== d1 && codes[d2]) {
-              specificHtml += `<strong>${formatDateFriendly(d2)}:</strong> ${codes[d2]}<br>`;
-            }
+            if (d1 && codes[d1]) specificHtml += `<strong>${formatDateFriendly(d1)}:</strong> ${codes[d1]}<br>`;
+            if (d2 && d2 !== d1 && codes[d2]) specificHtml += `<strong>${formatDateFriendly(d2)}:</strong> ${codes[d2]}<br>`;
             
             const notes = fd.get('notes');
-            if (notes) {
-              specificHtml += `<br><strong>Notes:</strong><br>${notes}`;
-            }
+            if (notes) specificHtml += `<br><strong>Notes:</strong><br>${notes}`;
           } else {
             specificHtml += `Access will be coordinated by Listing Agent/Seller:<br>${fd.get('la_name')} - ${fd.get('la_phone')}`;
           }
@@ -725,7 +790,7 @@ export default function App() {
             timeWindow1: s.schedule?.timeWindow1,
             date2: s.schedule?.date2,
             timeWindow2: s.schedule?.timeWindow2,
-            vendorSpecificAccessHtml: specificHtml // <-- Passed to Make.com!
+            vendorSpecificAccessHtml: specificHtml
           };
         })
       });
@@ -872,11 +937,13 @@ export default function App() {
                 <div>
                   <h1 className="text-2xl font-bold text-slate-800">{selectedJob.address.split(',')[0]}</h1>
                   <p className="text-slate-500 flex items-center gap-1 mt-1"><MapPin size={16} className="text-purple-500"/> {selectedJob.address}</p>
+                  
+                  <div className="mt-4 inline-flex items-center gap-2 bg-purple-100 text-purple-800 px-3 py-1.5 rounded-lg font-bold text-sm border border-purple-200">
+                    <Calendar size={16} /> Main Inspection: {selectedJob.datetime}
+                  </div>
                 </div>
                 <div className="text-right flex flex-col items-end">
-                  <div className="text-slate-800 font-medium flex items-center justify-end gap-1"><Calendar size={16} className="text-purple-500"/> {selectedJob.datetime}</div>
-                  <div className="text-slate-500 text-sm mt-1 mb-3">ID: {selectedJob.reportId}</div>
-                  
+                  <div className="text-slate-500 text-sm mb-3">ID: {selectedJob.reportId}</div>
                   <button 
                     onClick={() => setJobToDelete(selectedJob.id)}
                     className="flex items-center gap-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 px-3 py-1.5 rounded-lg transition-colors"
@@ -893,12 +960,22 @@ export default function App() {
                   <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Phone size={14} className="text-purple-400"/> {selectedJob.buyer.phone}</p>
                 </div>
                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
-                  <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">Coordinating Agent</h3>
+                  <div className="flex justify-between items-start mb-3">
+                    <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Coordinating Agent</h3>
+                    <button 
+                      onClick={() => setAgentEditJob(selectedJob)}
+                      className="text-slate-400 hover:text-purple-600 transition-colors"
+                      title="Edit Agent Info"
+                    >
+                      <Edit2 size={16} />
+                    </button>
+                  </div>
                   <p className="font-medium text-slate-800 flex items-center gap-2"><User size={16} className="text-purple-500"/> {selectedJob.buyerAgent.name}</p>
-                  <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Phone size={14} className="text-purple-400"/> {selectedJob.buyerAgent.phone}</p>
+                  <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Phone size={14} className="text-purple-400"/> {selectedJob.buyerAgent.phone || 'No phone provided'}</p>
+                  <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Mail size={14} className="text-purple-400"/> {selectedJob.buyerAgent.email || 'No email provided'}</p>
                   
                   {selectedJob.access.status === 'provided' ? (
-                    <div className="mt-3 p-3 bg-emerald-50 border border-emerald-100 rounded-md">
+                    <div className="mt-4 p-3 bg-emerald-50 border border-emerald-100 rounded-md">
                       <div className="flex justify-between items-center mb-2">
                         <div className="text-xs text-emerald-700 font-bold uppercase">Access Codes Received</div>
                         <div className="flex gap-1 border-l-2 pl-2">
@@ -920,7 +997,7 @@ export default function App() {
                       </div>
                     </div>
                   ) : selectedJob.access.status === 'waiting_on_listing_agent' ? (
-                    <div className="mt-3 p-2 bg-orange-50 border border-orange-100 rounded-md">
+                    <div className="mt-4 p-2 bg-orange-50 border border-orange-100 rounded-md">
                       <div className="flex justify-between items-center mb-1">
                         <div className="text-xs text-orange-700 font-bold uppercase">Waiting on Agent/Seller</div>
                         <div className="flex gap-1 border-l-2 pl-2">
@@ -935,7 +1012,7 @@ export default function App() {
                       <div className="text-sm text-orange-900">{selectedJob.access.listingAgent.name} ({selectedJob.access.listingAgent.phone})</div>
                     </div>
                   ) : (
-                    <div className="mt-3">
+                    <div className="mt-4">
                       {!selectedJob.services.every(s => s.status === 'scheduled') ? (
                         <div className="p-2 bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium rounded flex items-center gap-2">
                           <Clock size={16} /> Waiting for Vendors to schedule...
@@ -992,6 +1069,13 @@ export default function App() {
                     
                     {service.status === 'pending' ? (
                       <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                        <button 
+                          onClick={() => setVendorSwapService({ jobId: selectedJob.id, service: service })}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-sm rounded-lg flex items-center justify-center gap-1.5 transition-colors border border-slate-200 flex-1 md:flex-none"
+                          title="Swap Vendor"
+                        >
+                          <ArrowLeftRight size={14}/> Swap
+                        </button>
                         <a 
                           href={`tel:${service.phone}`}
                           className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-sm rounded-lg flex items-center justify-center gap-1.5 transition-colors border border-slate-200 flex-1 md:flex-none"
@@ -1031,8 +1115,17 @@ export default function App() {
                         </div>
                       </div>
                     ) : (
-                      <div className="flex items-center gap-1 text-emerald-600 font-medium text-sm">
-                        <CheckCircle size={18}/> Confirmed
+                      <div className="flex items-center gap-4">
+                        <button 
+                          onClick={() => setVendorSwapService({ jobId: selectedJob.id, service: service })}
+                          className="px-3 py-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 font-medium text-sm rounded-lg flex items-center justify-center gap-1.5 transition-colors border border-transparent hover:border-slate-300"
+                          title="Swap Vendor"
+                        >
+                          <ArrowLeftRight size={14}/> Swap
+                        </button>
+                        <div className="flex items-center gap-1 text-emerald-600 font-medium text-sm">
+                          <CheckCircle size={18}/> Confirmed
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1045,12 +1138,22 @@ export default function App() {
                   <h4 className="font-medium text-white flex items-center gap-2">
                     <RefreshCw size={16} className="text-purple-400" /> GCal Description Output
                   </h4>
-                  <button 
-                    onClick={() => navigator.clipboard.writeText(generateGCalSyncText(selectedJob))}
-                    className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1 rounded transition-colors"
-                  >
-                    Copy to Clipboard
-                  </button>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={handleForceSync}
+                      disabled={isSyncing}
+                      className="text-xs font-bold bg-purple-600 hover:bg-purple-500 text-white px-3 py-1 rounded flex items-center gap-1 transition-colors disabled:opacity-50"
+                    >
+                      {isSyncing ? <RefreshCw size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                      Force Sync to Calendar
+                    </button>
+                    <button 
+                      onClick={() => navigator.clipboard.writeText(generateGCalSyncText(selectedJob))}
+                      className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1 rounded transition-colors"
+                    >
+                      Copy
+                    </button>
+                  </div>
                 </div>
                 <pre className="text-xs whitespace-pre-wrap font-mono bg-slate-950 p-4 rounded-lg border border-slate-800">
                   {generateGCalSyncText(selectedJob)}
@@ -1092,6 +1195,66 @@ export default function App() {
                     Yes, Delete
                   </button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Edit Agent Modal */}
+          {agentEditJob && (
+            <div className="absolute inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full border border-slate-200">
+                <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                  <Edit2 className="text-purple-600" size={20} />
+                  Edit Agent Information
+                </h3>
+                <form onSubmit={submitAgentEdit} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Agent Name</label>
+                    <input type="text" name="name" defaultValue={agentEditJob.buyerAgent.name} required className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Phone Number</label>
+                    <input type="text" name="phone" defaultValue={agentEditJob.buyerAgent.phone} className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Email Address</label>
+                    <input type="email" name="email" defaultValue={agentEditJob.buyerAgent.email} className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
+                  </div>
+                  <div className="flex justify-end gap-3 mt-6">
+                    <button type="button" onClick={() => setAgentEditJob(null)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">Cancel</button>
+                    <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors shadow-sm">Save Changes</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Swap Vendor Modal */}
+          {vendorSwapService && (
+            <div className="absolute inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full border border-slate-200">
+                <h3 className="text-lg font-bold text-slate-800 mb-2 flex items-center gap-2">
+                  <ArrowLeftRight className="text-purple-600" size={20} />
+                  Swap Vendor
+                </h3>
+                <p className="text-sm text-slate-600 mb-4">
+                  Currently assigned to <strong>{vendorSwapService.service.vendor}</strong> for {vendorSwapService.service.type}.
+                </p>
+                <form onSubmit={submitVendorSwap} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Select New Vendor</label>
+                    <select name="newVendorId" required className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500 bg-white">
+                      <option value="">-- Choose Vendor --</option>
+                      {vendors.map(v => (
+                        <option key={v.id} value={v.id}>{v.vendor} ({v.type})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex justify-end gap-3 mt-6 pt-4 border-t">
+                    <button type="button" onClick={() => setVendorSwapService(null)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">Cancel</button>
+                    <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors shadow-sm">Confirm Swap</button>
+                  </div>
+                </form>
               </div>
             </div>
           )}
