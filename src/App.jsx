@@ -406,7 +406,6 @@ export default function App() {
     const job = jobs.find(j => j.id === vendorSwapService.jobId);
     const serviceToSwap = vendorSwapService.service;
 
-    // Safely update the original GCal text to reflect the swap
     const baseRawText = serviceToSwap.rawText.split(' (Swapped')[0];
     const newRawText = `${baseRawText} (Swapped to ${newVendor.vendor})`;
     const newGCalText = job.rawGCalText.replace(serviceToSwap.rawText, newRawText);
@@ -417,15 +416,15 @@ export default function App() {
       if (s.id === serviceToSwap.id) {
         return {
           ...s,
-          id: crypto.randomUUID(), // Generate new ID to invalidate the old vendor's portal link
+          id: crypto.randomUUID(), 
           vendor: newVendor.vendor,
           email: newVendor.email,
           phone: newVendor.phone,
           visits: newVendor.visits,
-          type: newVendor.type || s.type, // Maintain service type
+          type: newVendor.type || s.type,
           match: newVendor.match,
           rawText: newRawText,
-          status: 'pending', // Reset to pending so we can re-request
+          status: 'pending', 
           schedule: { date1: null, timeWindow1: null, date2: null, timeWindow2: null, requestedCalendar: false, calendarEmail: '' }
         };
       }
@@ -705,6 +704,9 @@ export default function App() {
     e.preventDefault();
     if (!portalJob || !user) return;
 
+    const isListingAgentFlow = portalJob.access.status === 'waiting_on_listing_agent';
+    const effectiveFormMode = isListingAgentFlow ? 'provideCode' : agentFormMode;
+
     const fd = new FormData(e.target);
     let updatedJob = { ...portalJob };
     
@@ -719,7 +721,7 @@ export default function App() {
     plainTextAccess += `Post-Inspection Walkthrough: ${walkthrough}\n\n`;
 
     const codes = {};
-    if (agentFormMode === 'provideCode') {
+    if (effectiveFormMode === 'provideCode') {
       getRequiredAccessDates(portalJob).forEach(date => {
         codes[date] = fd.get(`code_${date}`);
         formattedAccessText += `<strong>${formatDateFriendly(date)}:</strong> ${codes[date]}<br>`;
@@ -765,7 +767,7 @@ export default function App() {
         vendorContacts: updatedJob.services.map(s => {
           let specificHtml = `<strong>Property Status:</strong> ${occupancy}<br><strong>Post-Inspection Walkthrough:</strong> ${walkthrough}<br><br>`;
           
-          if (agentFormMode === 'provideCode') {
+          if (effectiveFormMode === 'provideCode') {
             const d1 = s.schedule?.date1;
             const d2 = s.schedule?.date2;
             
@@ -997,7 +999,7 @@ export default function App() {
                       </div>
                     </div>
                   ) : selectedJob.access.status === 'waiting_on_listing_agent' ? (
-                    <div className="mt-4 p-2 bg-orange-50 border border-orange-100 rounded-md">
+                    <div className="mt-4 p-3 bg-orange-50 border border-orange-100 rounded-md">
                       <div className="flex justify-between items-center mb-1">
                         <div className="text-xs text-orange-700 font-bold uppercase">Waiting on Agent/Seller</div>
                         <div className="flex gap-1 border-l-2 pl-2">
@@ -1010,6 +1012,22 @@ export default function App() {
                         </div>
                       </div>
                       <div className="text-sm text-orange-900">{selectedJob.access.listingAgent.name} ({selectedJob.access.listingAgent.phone})</div>
+                      
+                      <div className="mt-3 pt-3 border-t border-orange-200 flex gap-2">
+                        <button 
+                          onClick={() => window.location.hash = `agent/${selectedJob.id}`}
+                          className="flex-1 px-3 py-1.5 bg-orange-100 text-orange-800 hover:bg-orange-200 font-medium text-sm rounded transition-colors flex items-center justify-center gap-2"
+                        >
+                          Open LA Portal
+                        </button>
+                        <button 
+                          onClick={() => navigator.clipboard.writeText(generateMagicLink('agent', selectedJob.id))}
+                          className="px-3 py-1.5 border border-orange-300 hover:bg-orange-200 text-orange-800 rounded transition-colors flex-shrink-0"
+                          title="Copy Link for Listing Agent"
+                        >
+                          <LinkIcon size={16}/> Copy Link
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <div className="mt-4">
@@ -1531,7 +1549,8 @@ export default function App() {
   const renderAgentPortal = () => {
     if (!portalJob) return <div className="p-8 text-center text-slate-500">Loading Access Details...</div>;
     
-    if (portalSuccess || portalJob.access.status !== 'pending') {
+    // BUG FIX: Portal now stays open for the Listing Agent until codes are explicitly 'provided'
+    if (portalSuccess || portalJob.access.status === 'provided') {
       return (
         <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl p-8 max-w-md w-full text-center border border-slate-200">
@@ -1546,6 +1565,7 @@ export default function App() {
     }
 
     const requiredDates = getRequiredAccessDates(portalJob);
+    const isListingAgentFlow = portalJob.access.status === 'waiting_on_listing_agent';
 
     return (
       <div className="min-h-screen bg-slate-100 p-4 md:p-8 font-sans">
@@ -1557,30 +1577,38 @@ export default function App() {
             </div>
             
             <div className="p-6">
-              <p className="text-slate-600 text-sm mb-6 leading-relaxed">
-                Hi {portalJob.buyerAgent.name.split(' ')[0]}, we need access instructions for Todd's whole home inspection on <strong>{portalJob.datetime.split('•')[0]}</strong>, as well as for the scheduled vendors.
-              </p>
+              {isListingAgentFlow ? (
+                <p className="text-slate-600 text-sm mb-6 leading-relaxed">
+                  Hi <strong>{portalJob.access.listingAgent.name.split(' ')[0]}</strong>, we need access instructions for Todd's whole home inspection on <strong>{portalJob.datetime.split('•')[0]}</strong>, as well as for the scheduled vendors.
+                </p>
+              ) : (
+                <p className="text-slate-600 text-sm mb-6 leading-relaxed">
+                  Hi <strong>{portalJob.buyerAgent.name.split(' ')[0]}</strong>, we need access instructions for Todd's whole home inspection on <strong>{portalJob.datetime.split('•')[0]}</strong>, as well as for the scheduled vendors.
+                </p>
+              )}
 
-              <div className="flex bg-slate-100 p-1 rounded-lg mb-6">
-                <button 
-                  onClick={() => setAgentFormMode('provideCode')}
-                  className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${agentFormMode === 'provideCode' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                >
-                  I'll provide access codes
-                </button>
-                <button 
-                  onClick={() => setAgentFormMode('provideListingAgent')}
-                  className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${agentFormMode === 'provideListingAgent' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                >
-                  Contact Listing Agent / Seller
-                </button>
-              </div>
+              {!isListingAgentFlow && (
+                <div className="flex bg-slate-100 p-1 rounded-lg mb-6">
+                  <button 
+                    onClick={() => setAgentFormMode('provideCode')}
+                    className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${agentFormMode === 'provideCode' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  >
+                    I'll provide access codes
+                  </button>
+                  <button 
+                    onClick={() => setAgentFormMode('provideListingAgent')}
+                    className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${agentFormMode === 'provideListingAgent' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  >
+                    Contact Listing Agent / Seller
+                  </button>
+                </div>
+              )}
 
-              {agentFormMode === 'provideCode' ? (
+              {agentFormMode === 'provideCode' || isListingAgentFlow ? (
                 <form onSubmit={submitAgentAccess}>
                   <div className="mb-6 p-4 bg-slate-50 border border-slate-200 rounded-lg">
                     <label className="block text-sm font-bold text-slate-700 mb-2">Will the buyer and/or agent be present for a walkthrough at the end of the inspection?</label>
-                    <select name="walkthrough" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none text-slate-800 bg-white mb-4">
+                    <select name="walkthrough" required defaultValue={portalJob.access.walkthrough} className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none text-slate-800 bg-white mb-4">
                       <option value="">Select answer...</option>
                       <option value="Yes">Yes</option>
                       <option value="No">No</option>
@@ -1588,7 +1616,7 @@ export default function App() {
                     </select>
 
                     <label className="block text-sm font-bold text-slate-700 mb-2">Is the property currently Vacant or Occupied?</label>
-                    <select name="occupancy" required className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none text-slate-800 bg-white">
+                    <select name="occupancy" required defaultValue={portalJob.access.occupancy} className="w-full border-slate-300 rounded-lg p-3 border focus:ring-2 focus:ring-emerald-500 outline-none text-slate-800 bg-white">
                       <option value="">Select status...</option>
                       <option value="Vacant">Vacant</option>
                       <option value="Occupied">Occupied</option>
