@@ -143,6 +143,35 @@ export default async function handler(req, res) {
       }
     }
 
+    // 14-Day Duplicate Address Shield
+    if (job.address) {
+      const normalizedAddress = job.address.trim().toLowerCase();
+      const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
+      const now = Date.now();
+      const jobsRef = collection(db, 'artifacts', appId, 'public', 'data', 'jobs');
+      const existingJobsSnapshot = await getDocs(jobsRef);
+
+      let duplicateJob = null;
+      existingJobsSnapshot.forEach(existingDoc => {
+        if (duplicateJob) return;
+        const existing = existingDoc.data();
+        const existingAddress = (existing.address || '').trim().toLowerCase();
+        if (existingAddress === normalizedAddress && (now - (existing.createdAt || 0)) < FOURTEEN_DAYS_MS) {
+          duplicateJob = existing;
+        }
+      });
+
+      if (duplicateJob) {
+        console.log(`[DUPLICATE SHIELD] Skipping job creation for "${job.address}" (matches job ${duplicateJob.id} created within 14 days).`);
+        return res.status(200).json({
+          success: true,
+          skipped: true,
+          reason: 'Duplicate address within 14 days',
+          existingJobId: duplicateJob.id
+        });
+      }
+    }
+
     // FSBO / No Buyer's Agent Fallback
     const agentNameRaw = job.buyerAgent.name.toLowerCase();
     if (!agentNameRaw || agentNameRaw === 'na' || agentNameRaw === 'n/a' || agentNameRaw === 'none') {
@@ -181,6 +210,8 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         event: 'job_created',
         address: job.address,
+        datetime: job.datetime,
+        mainDate: job.mainDate,
         job: job,
         hasInternalSewer: hasInternalSewer,
         agentLink: `${baseUrl}/#agent/${job.id}`,
@@ -189,6 +220,9 @@ export default async function handler(req, res) {
           email: s.email,
           phone: s.phone,
           type: s.type,
+          address: job.address,
+          datetime: job.datetime,
+          mainDate: job.mainDate,
           link: `${baseUrl}/#vendor/${job.id}/${s.id}`
         })),
         fullSyncText: job.rawGCalText

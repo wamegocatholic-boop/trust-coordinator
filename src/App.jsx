@@ -93,6 +93,7 @@ export default function App() {
   const [showVendorManager, setShowVendorManager] = useState(false);
   const [vendorForm, setVendorForm] = useState(null);
   const [agentEditJob, setAgentEditJob] = useState(null);
+  const [jobEditModal, setJobEditModal] = useState(null);
   const [vendorSwapService, setVendorSwapService] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
@@ -361,6 +362,8 @@ export default function App() {
       event: 'vendor_reminder',
       jobId: selectedJob.id,
       address: selectedJob.address,
+      datetime: selectedJob.datetime,
+      mainDate: selectedJob.mainDate,
       vendorName: service.vendor,
       email: service.email,
       phone: service.phone,
@@ -393,6 +396,52 @@ export default function App() {
       setAgentEditJob(null);
     } catch (err) {
       console.error("Error updating agent:", err);
+    }
+  };
+
+  const submitJobEdit = async (e) => {
+    e.preventDefault();
+    if (!jobEditModal) return;
+    const fd = new FormData(e.target);
+    const newAddress = (fd.get('address') || jobEditModal.address).trim();
+    const newDatetime = (fd.get('datetime') || jobEditModal.datetime).trim();
+    const newMainDate = (fd.get('mainDate') || jobEditModal.mainDate).trim();
+    const newReportId = (fd.get('reportId') || '').trim();
+    const newBuyerName = (fd.get('buyerName') || '').trim();
+    const newBuyerPhone = (fd.get('buyerPhone') || '').trim();
+    const newBuyerEmail = (fd.get('buyerEmail') || '').trim();
+
+    const updatedJob = {
+      ...jobEditModal,
+      address: newAddress,
+      datetime: newDatetime,
+      mainDate: newMainDate,
+      reportId: newReportId,
+      buyer: {
+        name: newBuyerName,
+        phone: newBuyerPhone,
+        email: newBuyerEmail
+      },
+      services: jobEditModal.services.map(s => {
+        if (s.email === 'Internal' || s.phone === 'Internal') {
+          return {
+            ...s,
+            schedule: {
+              ...s.schedule,
+              date1: newMainDate,
+              timeWindow1: newDatetime.split('•')[1]?.trim() || s.schedule?.timeWindow1 || 'At Inspection Time'
+            }
+          };
+        }
+        return s;
+      })
+    };
+
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'jobs', updatedJob.id), updatedJob);
+      setJobEditModal(null);
+    } catch (err) {
+      console.error("Error updating job details:", err);
     }
   };
 
@@ -613,6 +662,8 @@ export default function App() {
       await sendWebhook({
         event: 'job_created',
         address: job.address,
+        datetime: job.datetime,
+        mainDate: job.mainDate,
         job: job,
         hasInternalSewer: hasInternalSewer,
         agentLink: generateMagicLink('agent', job.id),
@@ -621,8 +672,12 @@ export default function App() {
           email: s.email,
           phone: s.phone,
           type: s.type,
+          address: job.address,
+          datetime: job.datetime,
+          mainDate: job.mainDate,
           link: generateMagicLink('vendor', job.id, s.id)
-        }))
+        })),
+        fullSyncText: job.rawGCalText
       });
 
       if (externalServices.length === 0) {
@@ -946,20 +1001,40 @@ export default function App() {
                 </div>
                 <div className="text-right flex flex-col items-end">
                   <div className="text-slate-500 text-sm mb-3">ID: {selectedJob.reportId}</div>
-                  <button 
-                    onClick={() => setJobToDelete(selectedJob.id)}
-                    className="flex items-center gap-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 px-3 py-1.5 rounded-lg transition-colors"
-                  >
-                    <Trash2 size={14} /> Delete Job
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={() => setJobEditModal(selectedJob)}
+                      className="flex items-center gap-1.5 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-3 py-1.5 rounded-lg transition-colors"
+                    >
+                      <Edit2 size={14} /> Edit Job
+                    </button>
+                    <button 
+                      onClick={() => setJobToDelete(selectedJob.id)}
+                      className="flex items-center gap-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 px-3 py-1.5 rounded-lg transition-colors"
+                    >
+                      <Trash2 size={14} /> Delete Job
+                    </button>
+                  </div>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 lg:gap-6 mb-8">
                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
-                  <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">Client Info</h3>
+                  <div className="flex justify-between items-start mb-3">
+                    <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Client Info</h3>
+                    <button 
+                      onClick={() => setJobEditModal(selectedJob)}
+                      className="text-slate-400 hover:text-purple-600 transition-colors"
+                      title="Edit Job & Client Details"
+                    >
+                      <Edit2 size={16} />
+                    </button>
+                  </div>
                   <p className="font-medium text-slate-800 flex items-center gap-2"><User size={16} className="text-purple-500"/> {selectedJob.buyer.name}</p>
-                  <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Phone size={14} className="text-purple-400"/> {selectedJob.buyer.phone}</p>
+                  <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Phone size={14} className="text-purple-400"/> {selectedJob.buyer.phone || 'No phone provided'}</p>
+                  {selectedJob.buyer.email && (
+                    <p className="text-slate-600 text-sm mt-1 flex items-center gap-2"><Mail size={14} className="text-purple-400"/> {selectedJob.buyer.email}</p>
+                  )}
                 </div>
                 <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
                   <div className="flex justify-between items-start mb-3">
@@ -1217,6 +1292,57 @@ export default function App() {
             </div>
           )}
 
+          {/* Edit Job Details Modal */}
+          {jobEditModal && (
+            <div className="absolute inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white rounded-xl shadow-2xl p-6 max-w-md w-full border border-slate-200 max-h-[90vh] overflow-y-auto">
+                <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                  <Edit2 className="text-purple-600" size={20} />
+                  Edit Job Details
+                </h3>
+                <form onSubmit={submitJobEdit} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Property Address</label>
+                    <input type="text" name="address" defaultValue={jobEditModal.address} required className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Main Inspection Date &amp; Time (Display)</label>
+                    <input type="text" name="datetime" defaultValue={jobEditModal.datetime} placeholder="e.g. Thursday, Apr 2 • 12:00 – 1:15 PM" required className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Main Inspection Date (For Access Codes)</label>
+                    <input type="date" name="mainDate" defaultValue={jobEditModal.mainDate} className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-slate-700 mb-1">Report ID</label>
+                    <input type="text" name="reportId" defaultValue={jobEditModal.reportId} className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
+                  </div>
+                  <div className="pt-2 border-t border-slate-200">
+                    <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Client / Buyer Info</h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-sm font-bold text-slate-700 mb-1">Client / Buyer Name</label>
+                        <input type="text" name="buyerName" defaultValue={jobEditModal.buyer?.name} className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold text-slate-700 mb-1">Client Phone</label>
+                        <input type="text" name="buyerPhone" defaultValue={jobEditModal.buyer?.phone} className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-bold text-slate-700 mb-1">Client Email</label>
+                        <input type="email" name="buyerEmail" defaultValue={jobEditModal.buyer?.email} className="w-full border border-slate-300 rounded p-2 outline-none focus:ring-2 focus:ring-purple-500" />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-3 mt-6 pt-2">
+                    <button type="button" onClick={() => setJobEditModal(null)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">Cancel</button>
+                    <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors shadow-sm">Save Changes</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
           {/* Edit Agent Modal */}
           {agentEditJob && (
             <div className="absolute inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
@@ -1455,6 +1581,12 @@ export default function App() {
                   <MapPin size={16} className="mt-0.5 flex-shrink-0 text-purple-500" />
                   <span>{portalJob.address}</span>
                 </div>
+                {portalJob.datetime && (
+                  <div className="mt-3 pt-3 border-t border-purple-200/70 text-sm flex items-start gap-2 font-semibold text-purple-950">
+                    <Calendar size={16} className="mt-0.5 flex-shrink-0 text-purple-600" />
+                    <span>Main Inspection: {portalJob.datetime}</span>
+                  </div>
+                )}
               </div>
 
               <form onSubmit={submitVendorSchedule}>
